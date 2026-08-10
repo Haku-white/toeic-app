@@ -34,13 +34,11 @@ function makeQueryBuilder(result: MockResult) {
 }
 
 describe('generateVocabBatch', () => {
-  it('creates a batch, includes existing tag words as dedup context, and stores pending items', async () => {
+  it('creates a batch, includes existing DB-wide words (regardless of tag) as dedup context, and stores pending items', async () => {
     const fromMock = vi.fn((table: string) => {
       if (table === 'generation_batches') return makeQueryBuilder({ data: { id: 'batch-2' }, error: null })
-      if (table === 'vocab_tags') return makeQueryBuilder({ data: { id: 1 }, error: null })
-      if (table === 'vocab_word_tags') {
-        return makeQueryBuilder({ data: [{ vocab_word_id: 'word-1' }], error: null })
-      }
+      // 20260813改修: 重複回避コンテキストはタグ単位ではなくDB全体のvocab_wordsを直接見る
+      // （vocab_tags/vocab_word_tagsを経由したタグ絞り込みは行わない）。
       if (table === 'vocab_words') return makeQueryBuilder({ data: [{ word: 'negotiate' }], error: null })
       if (table === 'generation_batch_items') return makeQueryBuilder({ data: null, error: null })
       throw new Error(`unexpected table: ${table}`)
@@ -83,10 +81,10 @@ describe('generateVocabBatch', () => {
     ])
   })
 
-  it('uses an empty dedup list when the tag does not exist yet', async () => {
+  it('uses an empty dedup list when there are no existing vocab_words yet', async () => {
     const fromMock = vi.fn((table: string) => {
       if (table === 'generation_batches') return makeQueryBuilder({ data: { id: 'batch-3' }, error: null })
-      if (table === 'vocab_tags') return makeQueryBuilder({ data: null, error: null }) // maybeSingle: 未作成タグ
+      if (table === 'vocab_words') return makeQueryBuilder({ data: [], error: null })
       if (table === 'generation_batch_items') return makeQueryBuilder({ data: null, error: null })
       throw new Error(`unexpected table: ${table}`)
     })
@@ -113,13 +111,9 @@ describe('generateVocabBatch', () => {
   })
 
   describe('contentKind="idiom" (13.2)', () => {
-    it('ignores tagName, uses IDIOM_TAG_NAME for dedup lookup, and builds the idiom prompt', async () => {
+    it('ignores tagName, uses DB-wide dedup context (regardless of tag), and builds the idiom prompt', async () => {
       const fromMock = vi.fn((table: string) => {
         if (table === 'generation_batches') return makeQueryBuilder({ data: { id: 'batch-4' }, error: null })
-        if (table === 'vocab_tags') return makeQueryBuilder({ data: { id: 9 }, error: null })
-        if (table === 'vocab_word_tags') {
-          return makeQueryBuilder({ data: [{ vocab_word_id: 'word-9' }], error: null })
-        }
         if (table === 'vocab_words') {
           return makeQueryBuilder({ data: [{ word: 'get the ball rolling' }], error: null })
         }
@@ -148,12 +142,6 @@ describe('generateVocabBatch', () => {
       )
 
       expect(result).toEqual({ batchId: 'batch-4', itemCount: 1 })
-
-      // tagNameが無くてもエラーにならず、vocab_tags検索にはIDIOM_TAG_NAMEが使われていること
-      const tagsEqCalls = fromMock.mock.results
-        .filter((_r, i) => fromMock.mock.calls[i][0] === 'vocab_tags')
-        .map((r) => (r.value as { eq: ReturnType<typeof vi.fn> }).eq.mock.calls[0])
-      expect(tagsEqCalls).toEqual([['name', IDIOM_TAG_NAME]])
 
       const promptArg = generateJson.mock.calls[0][0].prompt as string
       expect(promptArg).toContain('イディオム（慣用表現）')

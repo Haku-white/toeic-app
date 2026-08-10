@@ -29,29 +29,20 @@ export interface GenerateVocabBatchResult {
 
 const EXISTING_SAMPLES_LIMIT = 30
 
-/** 指定タグに紐づく既存単語（重複回避コンテキスト用）を直近N件取得する。タグが未作成なら空配列。 */
-async function getExistingWordsForTag(supabase: SupabaseClient, tagName: string): Promise<string[]> {
-  const { data: tagRow, error: tagError } = await supabase
-    .from('vocab_tags')
-    .select('id')
-    .eq('name', tagName)
-    .maybeSingle()
-  if (tagError) throw tagError
-  if (!tagRow) return []
-
-  const { data: wordTagRows, error: wordTagError } = await supabase
-    .from('vocab_word_tags')
-    .select('vocab_word_id')
-    .eq('tag_id', (tagRow as { id: number }).id)
-  if (wordTagError) throw wordTagError
-
-  const wordIds = ((wordTagRows ?? []) as { vocab_word_id: string }[]).map((r) => r.vocab_word_id)
-  if (wordIds.length === 0) return []
-
+/**
+ * 重複回避コンテキスト用の既存単語を直近N件、タグを問わずDB全体から取得する。
+ *
+ * 20260810発見の不具合修正: 従来（`getExistingWordsForTag`）はタグ単位でしか既存語を
+ * 見ていなかったため、既に別タグでコミット済みの単語をGeminiが再提案し、無駄な
+ * needs_reviewを発生させていた（ビジネス/日常会話/Part7頻出のバックフィルで`itinerary`等が
+ * 繰り返し発生）。近似重複検出（8.4②のRPC、コミット時の最終防波堤）はDB全体を見ているため
+ * 実際に重複登録される実害は無かったが、この生成プロンプトへの重複回避コンテキスト自体を
+ * DB全体に広げることで、そもそもneeds_reviewに落ちる頻度を減らす。
+ */
+async function getExistingWords(supabase: SupabaseClient): Promise<string[]> {
   const { data: wordRows, error: wordError } = await supabase
     .from('vocab_words')
     .select('word')
-    .in('id', wordIds)
     .order('created_at', { ascending: false })
     .limit(EXISTING_SAMPLES_LIMIT)
   if (wordError) throw wordError
@@ -62,8 +53,8 @@ async function getExistingWordsForTag(supabase: SupabaseClient, tagName: string)
 /**
  * 8.1のA→B→C（生成トリガー→Gemini API→generation_batch_itemsへの保存）を実行する。
  * 8.4以降の検証はここでは行わない（validate_batch.tsの責務）。
- * 13.2: contentKind='idiom'のときはprompts/idiom.mdを使い、重複回避の既存サンプルも
- * IDIOM_TAG_NAMEに紐づく単語から取得する（tagNameパラメータは無視する）。
+ * 13.2: contentKind='idiom'のときはprompts/idiom.mdを使う（tagNameパラメータは無視する）。
+ * 重複回避の既存サンプルはタグを問わずDB全体から取得する（`getExistingWords`参照）。
  */
 export async function generateVocabBatch(
   params: GenerateVocabBatchParams,
@@ -95,7 +86,7 @@ export async function generateVocabBatch(
   if (batchError) throw batchError
   const batchId = (batch as { id: string }).id
 
-  const existingWords = await getExistingWordsForTag(supabase, effectiveTagName)
+  const existingWords = await getExistingWords(supabase)
 
   const prompt =
     contentKind === 'idiom'
