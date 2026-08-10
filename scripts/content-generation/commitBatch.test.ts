@@ -135,7 +135,7 @@ describe('commitBatch (grammar)', () => {
 
   it('keeps the batch in needs_review status and does not insert a row when an item commit fails', async () => {
     const badItem = {
-      // category_code が存在しない想定（grammar_categories検索がエラーを返す）
+      // category_code が完全一致もfallbackの前方一致もしない想定
       question_text: 'Q',
       choices: ['a', 'b', 'c', 'd'],
       correct_index: 0,
@@ -144,19 +144,27 @@ describe('commitBatch (grammar)', () => {
       category_code: 'unknown-category',
     }
 
-    const itemsDispatch = makeDispatcher([
-      { data: [{ id: 'item-1', raw_payload: badItem }], error: null }, // select
-      { data: null, error: null }, // item-1 -> needs_review (catch path)
-      { data: null, error: null, count: 0 }, // committed count
-      { data: null, error: null, count: 1 }, // needs_review count
-      { data: null, error: null, count: 0 }, // rejected count
-      { data: null, error: null, count: 1 }, // remaining count (1 => not completed)
-    ])
+    const needsReviewBuilder = makeQueryBuilder({ data: null, error: null })
+    const itemBuilders = [
+      makeQueryBuilder({ data: [{ id: 'item-1', raw_payload: badItem }], error: null }), // select
+      needsReviewBuilder, // item-1 -> needs_review (catch path)
+      makeQueryBuilder({ data: null, error: null, count: 0 }), // committed count
+      makeQueryBuilder({ data: null, error: null, count: 1 }), // needs_review count
+      makeQueryBuilder({ data: null, error: null, count: 0 }), // rejected count
+      makeQueryBuilder({ data: null, error: null, count: 1 }), // remaining count (1 => not completed)
+    ]
+    let itemCallIndex = 0
+    const itemsDispatch = () => itemBuilders[itemCallIndex++]
+
     const batchesDispatch = makeDispatcher([
       { data: { content_type: 'grammar' }, error: null },
       { data: null, error: null },
     ])
-    const categoriesDispatch = makeDispatcher([{ data: null, error: new Error('category not found') }])
+    // 1: 完全一致(maybeSingle)がヒットなし / 2: fallbackの全件取得も前方一致なし
+    const categoriesDispatch = makeDispatcher([
+      { data: null, error: null },
+      { data: [{ id: 1, code: 'tense' }, { id: 7, code: 'conjunction' }], error: null },
+    ])
 
     const from = vi.fn((table: string) => {
       if (table === 'generation_batches') return batchesDispatch()
@@ -168,6 +176,110 @@ describe('commitBatch (grammar)', () => {
 
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const result = await commitBatch('batch-2', { supabase })
+    consoleErrorSpy.mockRestore()
+
+    expect(result).toEqual({ committedCount: 0, failedCount: 1 })
+
+    // 更新されたvalidation_errorsが"[object Object]"のような非情報的な文字列になっていないこと
+    const updateArg = (needsReviewBuilder.update as ReturnType<typeof vi.fn>).mock.calls[0][0] as {
+      validation_errors: string[]
+    }
+    expect(updateArg.validation_errors[0]).toContain('unknown-category')
+    expect(updateArg.validation_errors[0]).not.toContain('[object Object]')
+  })
+
+  it('resolves an abbreviated category_code via the prefix-match fallback (実データでGeminiが"comparison"を"COMP"のように省略して出力したケースを再現)', async () => {
+    const grammarItem = {
+      question_text: 'Q',
+      choices: ['a', 'b', 'c', 'd'],
+      correct_index: 0,
+      explanation: 'exp',
+      difficulty: 2,
+      category_code: 'COMP',
+    }
+
+    const itemsDispatch = makeDispatcher([
+      { data: [{ id: 'item-1', raw_payload: grammarItem }], error: null },
+      { data: null, error: null }, // item-1 update -> committed
+      { data: null, error: null, count: 1 },
+      { data: null, error: null, count: 0 },
+      { data: null, error: null, count: 0 },
+      { data: null, error: null, count: 0 },
+    ])
+    const batchesDispatch = makeDispatcher([
+      { data: { content_type: 'grammar' }, error: null },
+      { data: null, error: null },
+    ])
+    // 1: 完全一致(maybeSingle)がヒットなし / 2: fallbackの全件取得で"comp"が"comparison"の前方一致として解決
+    const categoriesDispatch = makeDispatcher([
+      { data: null, error: null },
+      {
+        data: [
+          { id: 1, code: 'tense' },
+          { id: 8, code: 'comparison' },
+        ],
+        error: null,
+      },
+    ])
+    const questionsDispatch = makeDispatcher([{ data: { id: 'question-1' }, error: null }])
+
+    const from = vi.fn((table: string) => {
+      if (table === 'generation_batches') return batchesDispatch()
+      if (table === 'generation_batch_items') return itemsDispatch()
+      if (table === 'grammar_categories') return categoriesDispatch()
+      if (table === 'grammar_questions') return questionsDispatch()
+      throw new Error(`unexpected table: ${table}`)
+    })
+    const supabase = { from } as unknown as Parameters<typeof commitBatch>[1]['supabase']
+
+    const result = await commitBatch('batch-comp', { supabase })
+
+    expect(result).toEqual({ committedCount: 1, failedCount: 0 })
+  })
+
+  it('throws (and falls back the item to needs_review) when the fallback prefix-match is ambiguous', async () => {
+    const grammarItem = {
+      question_text: 'Q',
+      choices: ['a', 'b', 'c', 'd'],
+      correct_index: 0,
+      explanation: 'exp',
+      difficulty: 2,
+      category_code: 'co', // 'comparison'にも仮想の'conjunction'にも前方一致しうる曖昧なコード
+    }
+
+    const itemsDispatch = makeDispatcher([
+      { data: [{ id: 'item-1', raw_payload: grammarItem }], error: null },
+      { data: null, error: null }, // item-1 -> needs_review (catch path)
+      { data: null, error: null, count: 0 },
+      { data: null, error: null, count: 1 },
+      { data: null, error: null, count: 0 },
+      { data: null, error: null, count: 1 },
+    ])
+    const batchesDispatch = makeDispatcher([
+      { data: { content_type: 'grammar' }, error: null },
+      { data: null, error: null },
+    ])
+    const categoriesDispatch = makeDispatcher([
+      { data: null, error: null },
+      {
+        data: [
+          { id: 7, code: 'conjunction' },
+          { id: 8, code: 'comparison' },
+        ],
+        error: null,
+      },
+    ])
+
+    const from = vi.fn((table: string) => {
+      if (table === 'generation_batches') return batchesDispatch()
+      if (table === 'generation_batch_items') return itemsDispatch()
+      if (table === 'grammar_categories') return categoriesDispatch()
+      throw new Error(`unexpected table: ${table}`)
+    })
+    const supabase = { from } as unknown as Parameters<typeof commitBatch>[1]['supabase']
+
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const result = await commitBatch('batch-ambiguous', { supabase })
     consoleErrorSpy.mockRestore()
 
     expect(result).toEqual({ committedCount: 0, failedCount: 1 })

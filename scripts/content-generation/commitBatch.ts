@@ -22,13 +22,20 @@ interface CommittableItem {
  * 与えていても稀に大文字化してしまうことがある（実データで確認済み: あるバッチの15件全てが
  * "SUBJUNCTIVE"のように出力された）。Postgresの文字列比較は大文字小文字を区別するため、
  * 正規化しないと該当カテゴリが見つからずコミットに失敗する。
+ *
+ * 完全一致（casing正規化後）で見つからない場合は、略称ゆれを想定したfallbackを行う
+ * （20260810の文法バックフィルで、Geminiが"comparison"を"COMP"のように省略して出力し、
+ * comparison/difficulty=5の10件全てがneeds_reviewに道連れになった実例がある。プロンプト側
+ * にも対策を入れているが（8.3参照）、すり抜けた場合の保険としてここでも救済する）。
+ * grammar_categoriesは9件の固定クローズドセット（4章）で、実データ上どの2つのcodeも
+ * 互いの接頭辞にならないため、前方一致による曖昧さは生じない。
  */
 async function resolveCategoryId(
   supabase: SupabaseClient,
   cache: Map<string, number>,
   categoryCode: string,
 ): Promise<number> {
-  const normalizedCode = categoryCode.toLowerCase()
+  const normalizedCode = categoryCode.trim().toLowerCase()
   const cached = cache.get(normalizedCode)
   if (cached !== undefined) return cached
 
@@ -36,11 +43,32 @@ async function resolveCategoryId(
     .from('grammar_categories')
     .select('id')
     .eq('code', normalizedCode)
-    .single()
+    .maybeSingle()
   if (error) throw error
-  const id = (data as { id: number }).id
-  cache.set(normalizedCode, id)
-  return id
+  if (data) {
+    const id = (data as { id: number }).id
+    cache.set(normalizedCode, id)
+    return id
+  }
+
+  const { data: allCategories, error: allError } = await supabase.from('grammar_categories').select('id, code')
+  if (allError) throw allError
+
+  const matches = ((allCategories ?? []) as { id: number; code: string }[]).filter(
+    (c) => c.code.startsWith(normalizedCode) || normalizedCode.startsWith(c.code),
+  )
+
+  if (matches.length === 1) {
+    const id = matches[0].id
+    cache.set(normalizedCode, id)
+    return id
+  }
+
+  throw new Error(
+    matches.length === 0
+      ? `category_code "${categoryCode}" はgrammar_categories.codeのいずれとも一致しません`
+      : `category_code "${categoryCode}" が複数のカテゴリと曖昧に一致しました: ${matches.map((m) => m.code).join(', ')}`,
+  )
 }
 
 async function commitGrammarItem(
@@ -173,12 +201,16 @@ export async function commitBatch(batchId: string, deps: CommitBatchDeps): Promi
       committedCount += 1
     } catch (error) {
       // 個別アイテムの失敗はneeds_reviewに戻し、バッチ全体は継続する
+      // エラーメッセージはError.messageを優先して抽出する。素の`String(error)`は
+      // PostgrestErrorのようなプレーンオブジェクトに対して"[object Object]"になり、
+      // 原因調査にSQLで実データを確認し直す必要が生じていた（20260812発見の実例）。
+      const errorMessage = error instanceof Error ? error.message : JSON.stringify(error)
       console.error(`item ${item.id} のコミットに失敗しました:`, error)
       await supabase
         .from('generation_batch_items')
         .update({
           status: 'needs_review',
-          validation_errors: [`コミット時にエラーが発生しました: ${String(error)}`],
+          validation_errors: [`コミット時にエラーが発生しました: ${errorMessage}`],
         })
         .eq('id', item.id)
       failedCount += 1
