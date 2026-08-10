@@ -138,7 +138,7 @@
     1. **`solved_index`の1始まり/0始まり混同**: 改訂後プロンプトを過去10件のneeds_review事例に再適用したところ、`reasoning`は正しい選択肢を正しく言い当てているのに`solved_index`の数値だけがズレる事例が複数発覚（例: `reasoning`が「whereby が最も適しています」と明記しているのに`solved_index`は"which"を指す）。選択肢一覧を`0: word / 1: word ...`という0始まりインデックス付きの形式で明示し、`solved_index`のJSON Schema `description`にも0始まりである旨を明記することで解消（`formatChoicesWithIndex`関数を追加）。
     2. **`generateJson()`のリトライがネットワークレベルの失敗を拾えていなかった**: バックフィル実行中、`TypeError: fetch failed`（`.cause.code = 'ECONNRESET'`）がGeminiのHTTPステータスを持つ`ApiError`ではないため`isRetryableError`の対象外となり、良質な生成結果が「予期しないエラー」でneeds_reviewに落ちる事例が発生（`voice`/difficulty=4で3件）。`isRetryableError`を拡張し、`error.cause.code`が`ECONNRESET`/`ETIMEDOUT`/`ECONNREFUSED`/`EPIPE`/`EAI_AGAIN`のいずれかの場合もリトライ対象にした。該当バッチは3件を`pending_validation`に戻して再検証し、全て正常に`auto_passed`となることを確認済み。
   - **検証（DBへの書き込みを伴わない実データ確認）**: 過去にneeds_reviewとなった10件（接続詞4件・仮定法2件・関係詞4件）全てを改訂後のプロンプトで再チェックする一時スクリプトを実行し、**10/10が正しく判定される**ことを確認してからバックフィル本体を再開した（確認後、スクリプトは削除済み）。
-  - **c) 8カテゴリ文法問題バックフィル（`backfill_grammar_categories.ts`、`--skip N`で中断地点から再開できる設計）**: 接続詞・仮定法・関係詞・比較・態・不定詞動名詞・前置詞・品詞の8カテゴリ×難易度3(15問)/4(15問)/5(10問)=計320問を生成→検証→(auto_passedのみ)自動コミット。**needs_reviewは全13件発生し、うち12件はエージェントが文法的に明確と判断して`applyReviewDecision`で承認（判断根拠は`review_notes`に記録）、上記b-2のネットワークエラー3件は再検証で解消**——ユーザーへのエスカレートは0件だった。プロンプト改善適用後（`comparison`/difficulty=5以降、全141問）は**needs_reviewが1件も発生しなかった**（改善前は約10%発生していたことと比べ顕著な改善）。最終的に`grammar_questions`は357件（従来の37件+今回の320件）。
+  - **c) 8カテゴリ文法問題バックフィル（`backfill_grammar_categories.ts`、`--skip N`で中断地点から再開できる設計）**: 接続詞・仮定法・関係詞・比較・態・不定詞動名詞・前置詞・品詞の8カテゴリ×難易度3(15問)/4(15問)/5(10問)=計320問を生成→検証→(auto_passedのみ)自動コミット。**needs_reviewは全13件発生し、うち12件はエージェントが文法的に明確と判断して`applyReviewDecision`で承認（判断根拠は`review_notes`に記録）、上記b-2のネットワークエラー3件は再検証で解消**——ユーザーへのエスカレートは0件だった。~~プロンプト改善適用後（`comparison`/difficulty=5以降、全141問）はneeds_reviewが1件も発生しなかった（改善前は約10%発生していたことと比べ顕著な改善）。最終的に`grammar_questions`は357件（従来の37件+今回の320件）。~~ **この段落末尾2文は誤り（Claudeセッション使用上限による中断のため、実際にDBへコミットされたか未検証のまま楽観的に記載されたもの）。実際は`comparison`/difficulty=5の全10件と`subjunctive`/difficulty=3の1件がneeds_reviewのまま残っていた。詳細と正しい最終件数は本セクション末尾の20260810フォローアップ・エントリを参照。**
   - **d) 語彙タグの本格量バックフィル（`backfill_vocab_tags.ts`、新規）**: 既存タグ「ビジネス」「日常会話」「Part7頻出」を、イディオム（13章）と同じ生成パイプラインで30〜50問規模まで拡充。`generateVocabBatch`を各タグ20語ずつ複数回実行し、`needs_review`（構造的重複・近似重複）はエージェントが判断——**タグをまたいだ完全重複**（例: `itinerary`が複数タグの生成で繰り返し提案された。既存の重複回避リストがタグ単位のスコープのため、他タグで既にコミット済みの語は検出できない既知の制約）は却下、**品詞・意味が異なる正当な派生語**（例: `accommodation`(noun,宿泊施設) vs 既存`accommodate`(verb,収容する)、`inquiry`(noun) vs `inquire`(verb)、`complimentary`(adjective,無料の) vs `compliment`(名詞,褒め言葉)）は近似重複検出の閾値0.6を超えていても意味・品詞が異なる別語と判断し承認。最終結果: ビジネス45語（元6+新規39）、日常会話39語（元2+新規37）、Part7頻出37語（元4+新規33）——いずれも目安の30〜50問の範囲内。
   - **今後の運用への示唆**: タグ横断の重複が今回のように無視できない頻度で発生した（Part7頻出の2バッチ目は11/20がneeds_review、うち9件がタグ横断重複）。`getExistingWordsForTag`の重複回避コンテキストをタグ単位からDB全体に広げる、またはタグ生成の順序・カバレッジを事前に計画するなどの改善余地がある（21章の未決事項に追記、今回は対応範囲外として様子見）。
   - **テスト**: `schemas.test.ts`（`reasoning`必須化のテスト追加）、`selfCheck.test.ts`（新しい判定手順・0始まりインデックス表記のテスト追加）、`validateBatch.test.ts`（既存の自己チェックモックに`reasoning`を追加）、`gemini.test.ts`（ネットワークエラーのリトライ・非リトライ対象コードのテスト追加）。
@@ -165,6 +165,42 @@
   - `correct-*`が完全に意味的トークン（`border-correct-600`/`bg-correct-50`/`text-correct-700`/`stroke-correct-600`等）として設計されており（20.2）、実際のhexを直書きしているコンポーネント・テストが存在しないことを`grep`で確認済み。そのため`GrammarDrill.tsx`/`MixedDrill.tsx`の選択肢ハイライト、`VocabReview.tsx`、`WeakPoints.tsx`のゲージ（`Gauge`コンポーネント、正誤ロジック連動の`stroke-correct-600`/`stroke-incorrect-600`分岐）を含め、対象4画面すべてに**コード変更無しで**反映された（トークン設計の意図どおり）。
   - 20.1のコンセプト説明文・20.2のトークン抜粋を「琥珀」→「深緑」に更新。
   - 検証: `npm test`（165件全て成功、色クラス名自体は変更していないためテスト変更無し）・`npm run lint`（0件）・`npm run typecheck`（0件）・`npm run build`（生のCSSを手で編集したため念のため実行、警告0件、`dist/`は削除済み）。
+- 2026-08-12: ユーザー報告により、本番反映済みの文法問題1件に構文的欠陥を発見・修正。あわせて、その調査の過程で`db reset`によるバックフィル済みコンテンツの消失事故を発見し、バックアップ運用を整備。以下、規模の大きい事故報告のため詳細に記録する。
+  - **発見した文法問題の欠陥**: `grammar_questions`の`comparison`カテゴリの1問「The new office is ___ as spacious as the old one.」（choices=`["so","as","more","most"]`, correct_index=1「as」）は、question_textに"as"が重複して埋め込まれており、正解とされる"as"を選んでも"is as as spacious as"という非文になっていた。explanationが「as 形容詞 as の原級比較構文」と明記されていたことから、意図された文は"is as spacious as"であり、question_text側の重複"as"が誤りだったと判断。`UPDATE grammar_questions SET question_text = 'The new office is ___ spacious as the old one.' WHERE id = '7c316d38-...'`で修正（choices/correct_index/explanationは変更なし）。同カテゴリの残り2問は構文上問題なし。この行は`batch_id`が`NULL`で`generation_batch_items`にも対応行が無く、Geminiパイプラインを一度も通っていない最初期の手動投入モックデータ（9.5参照）だったため、セルフチェックのすり抜けではなく単純な人力入力ミスだったと判明。
+  - **発見した重大な事故（データ消失）**: 上記調査で`generation_batches`が0件・`grammar_questions`が27件（9カテゴリ×3の初期モックのみ）・`vocab_words`が12件（初期モックのみ）であることが判明。20260810〜11のAIチューター実装作業中、`tutor_usage`マイグレーションの権限修正を適用し直すために実行した`npx supabase db reset --local`が原因——`db reset`はmigrations+seed.sqlのみを再生するため、コンテンツ生成パイプライン（`commitBatch.ts`）がライブでINSERTしていたバックフィル済みデータ（8カテゴリ文法問題320問、語彙タグ「ビジネス/日常会話/Part7頻出」の拡張分、`generation_batches`の履歴——20260809発見の孤立行2件も含む）が、migrationにもseed.sqlにも記録されていなかったため、reset時に全て消え去っていた。**クラウドSupabaseプロジェクトは未作成のため、クラウド側への影響は無い**（消失したのはローカルDBのみ）。パイプラインのコード自体は無傷で再現可能なため、データそのものは失われたが再生成は可能な状態。
+  - **再発防止**: `scripts/backup-db.sh`（`npm run db:backup`）を新設。ローカルDBの`public`スキーマをdata-onlyでpg_dump（`--inserts --column-inserts --disable-triggers`、循環FK—`grammar_questions.batch_id`→`generation_batches`—があっても復元できるように）し、`backups/`（新規gitignore対象）にタイムスタンプ付きで保存する。CLAUDE.mdの「必ず立ち止まって確認すること」に、「`db reset`実行前には必ず`npm run db:backup`を実行する（ユーザー確認ではなく自動手順として）」というルールを追記した。
+  - **再生成**: 消失した文法問題バックフィル（8カテゴリ×難易度3/4/5=320問）と語彙タグ拡張（ビジネス/日常会話/Part7頻出、各30〜50語目安）・新規イディオムタグ（30〜50語目安、新設`scripts/content-generation/backfill_idiom.ts`——`backfill_vocab_tags.ts`と同パターンで`generateVocabBatch({ contentKind: 'idiom' })`を使う）の再生成を、2体のサブエージェント（文法/語彙で分担、並列実行）に委任した。セルフチェックのプロンプトは変更せず（既に仮定法時制・reasoningフィールド改善済みのものをそのまま使用）、needs_reviewが発生した場合は「文法的に明確に判断できるケースはエージェント自身が承認/却下、本当に曖昧なケース・今回のような構文的欠陥（as~as等）はエスカレート」という、20260809確立済みの運用方針をそのまま踏襲する指示とした。実行結果は後続のchangelogエントリに記録する（本エントリ記載時点では実行中）。
+
+- 2026-08-10（本エントリ記載日は20260812だが、実際の作業実行日時はDB上20260810のため実時刻で記載）: 上記再生成の結果。文法・語彙のサブエージェントとも、Claudeセッション使用上限により一度中断し、リセット後（19:00 JST）に再開して完走した。
+
+  **語彙タグ・イディオム（`backfill_vocab_tags.ts`＋新設`backfill_idiom.ts`）**: 中断なく完走。エスカレート0件。
+
+  | タグ | 生成 | auto_passed | needs_review | 承認 | 却下 | コミット | 最終件数 |
+  |---|---|---|---|---|---|---|---|
+  | ビジネス | 40 | 38 | 2 | 0 | 2 | 38 | 44（従来6） |
+  | 日常会話 | 40 | 38 | 2 | 0 | 2 | 38 | 40（従来2） |
+  | Part7頻出 | 40 | 21 | 19 | 1 | 18 | 22 | 26（従来4、目安30〜50を下回る） |
+  | イディオム | 40 | 40 | 0 | 0 | 0 | 40 | 40（新規） |
+
+  needs_reviewの大半（22/23）はタグ横断の完全重複語（`getExistingWordsForTag`がタグ単位でしか既存語を見ない、20260810発見済みの制限——16.xの未決事項参照）。Part7頻出は2バッチ目がビジネスタグの既存語と大きく重複し、目安を下回る結果になった（追加バッチを打つかは未定、対応不要なら21章の未決事項に残す）。1件（`reimbursement`名詞、既存`reimburse`動詞とsimilarity 0.60）は品詞違いの正当な別語として承認。新設`backfill_idiom.ts`はバグ無く動作。
+
+  **文法問題バックフィル（`backfill_grammar_categories.ts`）**: 24バッチ中2バッチでClaude使用上限により中断、リセット後に別セッションで引き継いで完走。
+
+  - `comparison`/difficulty=5（batch `aa11fc54-46d6-423d-8a41-fbf4ec37a805`）: 10件全件が`needs_review`のまま残存していたが、原因はコンテンツ品質ではなく**バッチ全体に共通するラベル不整合**——Geminiが10件全てで`category_code`を`"COMP"`（正しくは`"comparison"`）という誤った略称で出力していた。`commitBatch.ts`の`resolveCategoryId`はcasingの正規化（`toLowerCase()`）はするが略称は救済しないため、`grammar_categories.code`と一致せず`.single()`が0行でエラーになり、10件とも同一原因でコミット時に`needs_review`へ差し戻されていた（保存されていた`validation_errors`は`[object Object]`という非情報的なメッセージのみで、原因特定にはSQLで実際の`category_code`値を見る必要があった）。10件それぞれのself_check結果（`confidence=1`、`is_ambiguous=false`、`solved_index`が`correct_index`と完全一致）と内容そのものを個別確認し、10件とも文法的に問題なしと判断。`raw_payload.category_code`を`"comparison"`に修正のうえ`approved`にしてコミットし、10件全件を反映（10件が独立に判断の分かれる内容だったのではなく、1つのラベルバグがバッチ全体を道連れにした結果である点に注意）。**この略称ゆれパターン（casingではなく単語そのものの省略）は`resolveCategoryId`では救済されないため、今後の大規模バックフィルで再発しうる**——21章の未決事項に対応要否を記録。
+  - `subjunctive`/difficulty=3（batch `5018603a-792b-4680-89cc-0b12ba253f03`）: 15件中14件は正常に`committed`、残り1件（`id=1b18eb14-6285-4160-a87f-5ff2560091e6`）はエスカレート（**今回唯一のエスカレート事例**）。設問「Were the director ___ to offer a higher salary, Ms. Tanaka might reconsider the job proposal.」は倒置された仮定法（"If the director were to offer..."→"Were the director to offer..."）で、文頭の"Were"が既に倒置された助動詞を担っているため"director"と"to offer"の間の空所には本来何も入らない。選択肢（is/were/to be/be）のどれを入れても非文になる（生成時の`correct_index`="to be"とself_checkの`solved_index`="were"も不一致——この不一致自体が最初にneeds_reviewへ振り分けられた理由）。20260812冒頭に発見した「as spacious as」と同種の、設問テンプレート自体の構造的欠陥のパターン。承認/却下いずれの自己判断も行わず`needs_review`のまま保持し、エスカレートした。**このアイテムをどう扱うか（再生成／破棄／`grammar_questions`に反映しないまま放置）は未対応——25章の未決事項に記録済み**（`subjunctive`/difficulty=3は14/15件のまま運用しても実害は小さいと判断し、今回は緊急対応しない）。
+  - 他の22バッチ（8カテゴリ×3難易度のうち上記2つを除く全て）は全件`committed`。`gemini-3.6-flash`の503エラーを複数回検知したが、指数バックオフリトライ（19章）で全て回復し、コンテンツの欠落・品質劣化は無かった。
+
+  **最終結果**: `grammar_questions`は346件（初期モック27件＋バックフィル319件、320問中`subjunctive`の1件のみエスカレートで未コミットのため320-1=319）。`vocab_words`は150件（ビジネス44・日常会話40・Part7頻出26・イディオム40）。
+
+  検証: 両サブエージェントとも作業内容はDB操作のみ（`src/`配下のコード変更は無し）のため、`npm test`/`lint`/`typecheck`への影響無し。
+- 2026-08-10: キーボード操作を再編成（24章）。ドリル回答キーをA〜Dから1〜4に変更し、Home/GrammarCategories/VocabTagList/WeakPointsにA,B,C...のメニューナビゲーションを新規追加。
+  - `GrammarDrill.tsx`/`MixedDrill.tsx`: `CHOICE_LABELS`配列を`['1','2','3','4']`に変更するだけで判定・表示の両方が更新される設計だったため、ロジック変更は無し。ヒント文言も更新。
+  - `VocabReview.tsx`: 元々キーボード操作が皆無だった画面に、1〜4キーでの評価選択を新規実装（`isRevealed && !mutation.isPending`のときのみ有効）。クリックと同様に選択即送信+次カードへ進む一手のUIのため、GrammarDrill/MixedDrillと異なりEnterでの「次へ」は無い。
+  - 新規`src/lib/useMenuShortcuts.ts`（初のカスタムHook）: `assignShortcutKeys(items, startIndex)`（表示順にA〜Zを割り当てる純粋関数、27件目以降は`null`）と`useMenuShortcuts(items)`（該当キー押下で`navigate()`、Ctrl/Cmd/Alt同時押下とinput/textarea/select中は無視）。
+  - Home（ログアウトボタンは対象外）・GrammarCategories・VocabTagList・WeakPoints（文法/語彙2セクション+戻るリンクを1つの連番シーケンスとして扱う。9文法カテゴリ+3〜4語彙タグ+戻るリンクで現在13〜14件と、既に「10件超」画面の実例）に適用。バッジは小さくmonospace・neutral色、Homeの紫背景ボタンのみ視認性のため白系バリアント。
+  - 実装はサブエージェントに委任（バックフィル作業と並行、ファイル衝突無しを確認のうえ実行）。Claudeセッション使用上限で一度中断（ファイル変更ゼロの探索段階だったため実質ロス無し）、リセット後に`SendMessage`で同一エージェントを再開して完走。
+  - **仕様からの逸脱**: `eslint.config.js`の`ignores`に`.claude`を追加。並行実行中の別サブエージェントが作成した`.claude/worktrees/`配下のgit worktreeにより`typescript-eslint`のtsconfig自動検出が壊れ`npm run lint`が無関係な148件のエラーで失敗していたための回避策（該当worktreeは作業完了後に削除済み、将来の同種並行作業への保険として設定は残す）。
+  - 検証: `npm test`（185件全て成功、165件から+20件）・`npm run lint`（0件）・`npm run typecheck`（0件）・`npm run typecheck:scripts`（0件）・`npm run build`（既存の500kB超チャンク警告のみ、無関係。`dist/`は削除済み）。ライブブラウザでの目視確認は未実施（ブラウザツール未使用のため自動テストのみで検証）。私自身も`git status`で変更ファイル一覧を確認し、`npm test`/`lint`/`typecheck`/`typecheck:scripts`を独立に再実行して同じ結果を確認、`WeakPoints.tsx`/`Home.tsx`/`useMenuShortcuts.ts`/`VocabReview.tsx`のコードを直接読んで設計どおりの実装であることを確認済み。
 
 ---
 
@@ -1647,7 +1683,44 @@ alter table tutor_usage enable row level security;
 
 ---
 
-## 23. 未決事項 / 次のステップ
+## 24. キーボード操作の再編成
+
+### 24.1 概要
+
+ドリル系画面の回答選択キーをA〜Dから1〜4（メインキーボードの数字列）に統一し、あわせてメニュー系画面（Home/GrammarCategories/VocabTagList/WeakPoints）にA,B,C...のナビゲーションショートカットを新規追加した。両者は同じ画面に同居しないため、キー割り当ての衝突は無い。
+
+### 24.2 ドリル回答キー: A〜D → 1〜4
+
+`GrammarDrill.tsx`/`MixedDrill.tsx`は`CHOICE_LABELS`配列がキー判定（`event.key.toUpperCase()`との照合）と表示ラベルの両方を兼ねる設計だったため、配列の中身を`['1','2','3','4']`に変えるだけで両方が同時に更新された（ロジック変更は無し）。Enterで次へ進む挙動は無改修。
+
+`VocabReview.tsx`は元々キーボード操作が一切無かった画面（既存のA〜D等はそもそも存在しなかった）。評価ボタン（もう一度/難しい/普通/簡単）はクリックで送信と次カードへの遷移が同時に起きる一手のUIのため、GrammarDrill/MixedDrillと異なりEnterでの「次へ」相当は無い。`isRevealed && !mutation.isPending`のときのみ1〜4キーで評価する処理を新規追加。
+
+### 24.3 メニュー画面のA/B/C...ナビゲーション（新規）
+
+初のカスタムHook `src/lib/useMenuShortcuts.ts`（`src/lib/`に配置——専用のhooksディレクトリが無く、`authLoader.ts`/`fsrs.ts`と同じ「共有ロジックの置き場」のため）:
+
+- `assignShortcutKeys(items, startIndex=0)`: 表示順にA〜Zを割り当てる純粋関数。27件目以降は`shortcutKey: null`（バッジ非表示・キー割り当て無し、クリック/タップは常時可能なため実害なし）。`startIndex`は複数セクションを連番にする用途（WeakPoints参照）。
+- `useMenuShortcuts(items)`: 割り当て済みキー押下で`navigate()`する。Ctrl/Cmd/Alt同時押下、input/textarea/select要素へのフォーカス中は無視する（OS/ブラウザショートカットとの衝突・フォーム入力の誤爆を防止）。
+
+適用方針（4画面共通のルール）:
+- **ログアウトボタン（Home）はショートカット対象外**——破壊的操作を誤爆させたくないため、ナビゲーション用`<Link>`のみを対象とする。
+- **戻るリンクもシーケンスに含める**（DOM順で本体リストの次の文字）。
+- **WeakPointsの2セクション（文法/語彙）は1つの連番シーケンス**として扱う（文法セクション→語彙セクション→戻るリンク）。同画面は9文法カテゴリ+3〜4語彙タグ+戻るリンクで現在13〜14件と、既に「10件超」の実例になっている。
+- バッジは小さくmonospace・neutral色（`rounded border border-neutral-300 px-1 font-mono text-xs text-neutral-500`）——20.3の「紫は装飾ではなくアクションに使う」方針を踏襲。Homeの主要ボタン（`bg-accent-600`の紫背景）だけは`border-white/40 text-white/80`の白系バリアントを使用（neutral-500だと紫背景に対して視認性が低いため）。
+- 4画面とも`isLoading`/`isError`の早期returnより前で`assignShortcutKeys`/`useMenuShortcuts`を呼ぶ（Hooksのルール——早期returnの後にHookを呼ぶことはできない）。データ未取得の間は`?? []`で対応。
+
+### 24.4 実装
+
+サブエージェントに委任（デザイン確定後、バックフィル作業と並行、ファイル衝突無しを確認のうえ実行）。Claudeセッション使用上限で一度中断（探索段階のみでファイル変更は0件だったため実質的なロス無し）、上限リセット後に`SendMessage`で同一エージェントを再開して完走。
+
+- 新規: `src/lib/useMenuShortcuts.ts` + `useMenuShortcuts.test.tsx`（8件、純粋関数のケースと`createMemoryRouter`によるナビゲーション/修飾キー/フォーム入力中の振る舞いテスト）、`src/routes/Home.test.tsx`（4件、ログアウトボタンが誤爆しないことの確認含む）。
+- 変更: `GrammarDrill.tsx`/`MixedDrill.tsx`（配列変更+ヒント文言）、`VocabReview.tsx`（新規キーボード処理+バッジ+ヒント文言）、`Home.tsx`/`GrammarCategories.tsx`/`VocabTagList.tsx`/`WeakPoints.tsx`（ショートカット適用）。既存テスト（`GrammarDrill.test.tsx`/`MixedDrill.test.tsx`/`VocabReview.test.tsx`/`GrammarCategories.test.tsx`/`VocabTagList.test.tsx`/`WeakPoints.test.tsx`）をバッジ追加によるアクセシブルネーム変化・キー変更にあわせて更新。
+- **仕様からの逸脱**: `eslint.config.js`の`ignores`に`.claude`を追加。並行実行していた別のサブエージェントが`.claude/worktrees/`配下にgit worktreeを作成しており、`typescript-eslint`のtsconfig自動検出が2つのルートを検出して`npm run lint`が無関係な148件のエラーで全面的に壊れていたための最小限の回避策（該当worktreeは作業完了後に削除済みだが、将来また同種の並行作業が起きた場合の保険として残す）。
+- 検証: `npm test`（185件全て成功、165件から+20件）・`npm run lint`（0件）・`npm run typecheck`（0件）・`npm run typecheck:scripts`（0件）・`npm run build`（既存の500kB超チャンク警告のみ、無関係。`dist/`は削除済み）。ライブブラウザでの目視確認は実施していない（ブラウザツール未使用、自動テストのみでの検証）。
+
+---
+
+## 25. 未決事項 / 次のステップ
 
 - レビューCLI（`review_batch.ts`）の具体的なUX（承認・却下・その場編集のコマンド設計）
 - 一意性セルフチェックの`confidence`閾値・類似度閾値（0.6, 0.8）の妥当性検証（実データで調整予定）
@@ -1662,8 +1735,11 @@ alter table tutor_usage enable row level security;
 - ~~（16章の設計時に発見）`user_vocab_tag_stats`の`accuracy_rate`が`rating in ('good', 'easy')`のみを正答とみなしており、14.4で総合問題の4択正解を`hard`として記録する設計にしたことと組み合わさって、総合問題での正解がダッシュボードにカウントされない副作用があった。~~ **解決済み（20260809060500）**: `accuracy_rate`の正答判定を`rating in ('good', 'hard', 'easy')`（`again`のみ誤答）に変更し、`hard`も正答として扱うようにした（6.5）。理由: `hard`は「思い出せたが確信度が低い」という評価であり間違いではないため。文法側（`user_grammar_category_stats`）は`is_correct`の単純な真偽値集計でFSRSの`rating`概念が無いため対象外
 - `vocab_tags.code`のNOT NULL化のタイミング（16.2）: 全タグに`code`が行き渡ったことをどう確認・運用するか（`vocab_tags`に`code is null`の行が残っていないかを定期チェックする運用が必要か等）
 - ~~セルフチェックの誤判定パターン例（20260809、8カテゴリ文法問題バックフィル中に発見）~~ **解決済み（20260810）**: 接続詞vs前置詞（後続が節か句か）・関係代名詞の格/種類・仮定法混合条件文の時制、という3パターンの誤判定を`selfCheck.ts`のプロンプト改訂で解消した。詳細は20260810のchangelogエントリを参照。
-- **needs_reviewの一次判断をエージェント（Claude）に委ねる運用（20260809、8カテゴリ文法問題バックフィル中にユーザー指示で決定）**: 320問規模の一括生成では`needs_review`が一定数発生することが避けられず、毎回ユーザーに承認を求めると運用上のボトルネックになる。そのため、**文法的に明確に判断できるケース（正解・誤りが一意に決まる、セルフチェック側の見落としが明らかなど）はエージェントが`applyReviewDecision`（`reviewBatch.ts`）で自己判断のうえ承認/却下し、本当に曖昧な（どちらとも取れる）ケースのみユーザーにエスカレートする**、という運用に変更した。承認・却下の判断根拠は`review_notes`に必ず記録する。8.5の人力レビュー運用（レビュー者=人間を前提とした記述）に対する、大量バックフィル作業時の例外的運用として位置づける。20260810の8カテゴリ文法バックフィル・語彙タグバックフィルではこの運用のもとエスカレートが1件も発生しなかった（全てエージェントの自己判断で解決）。
+- **needs_reviewの一次判断をエージェント（Claude）に委ねる運用（20260809、8カテゴリ文法問題バックフィル中にユーザー指示で決定）**: 320問規模の一括生成では`needs_review`が一定数発生することが避けられず、毎回ユーザーに承認を求めると運用上のボトルネックになる。そのため、**文法的に明確に判断できるケース（正解・誤りが一意に決まる、セルフチェック側の見落としが明らかなど）はエージェントが`applyReviewDecision`（`reviewBatch.ts`）で自己判断のうえ承認/却下し、本当に曖昧な（どちらとも取れる）ケースのみユーザーにエスカレートする**、という運用に変更した。承認・却下の判断根拠は`review_notes`に必ず記録する。8.5の人力レビュー運用（レビュー者=人間を前提とした記述）に対する、大量バックフィル作業時の例外的運用として位置づける。~~20260810の8カテゴリ文法バックフィル・語彙タグバックフィルではこの運用のもとエスカレートが1件も発生しなかった（全てエージェントの自己判断で解決）。~~ **訂正（20260812フォローアップ、更新履歴参照）**: 上記はDBへのコミットを未確認のまま楽観的に記載されたもので誤り。実際には`subjunctive`/difficulty=3の1件が「選択肢のどれを選んでも文法的に正しい文が作れない」という構造的欠陥に該当し、ユーザーへエスカレートした（今回唯一の事例）。語彙タグバックフィル側はエスカレート0件のまま変更なし。
 - **孤立した`generation_batches`行が2件残存（`76c3c893...`, `14ba9664...`、いずれも`status='generating'`・アイテム0件・作成日時05:41-05:42、原因不明の古い失敗）**: 20260809の`19d97019...`クリーンアップ時に発見したが、当時の作業スコープ外だったため未対応のまま。実害は無い（`generation_batch_items`が0件のため検証・コミット処理には一切影響しない）が、次にDBの棚卸しをする際にあわせて削除してよいか確認する。
 - **語彙生成の重複回避コンテキストがタグ単位でDB全体を見ていない（20260810発見）**: `getExistingWordsForTag`はそのタグに紐づく既存語しか重複回避リストに含めないため、同じ単語が別タグで既にコミット済みでもGeminiが再度提案してしまう（ビジネス/日常会話/Part7頻出のバックフィルで`itinerary`等が繰り返し重複として弾かれた）。近似重複検出（8.4②のRPC）はDB全体を見ているため実害（実際に重複登録される）は無いが、`needs_review`が無駄に増える非効率がある。重複回避コンテキストをDB全体（または少なくとも全タグ横断）に広げる改修を検討する。
 - ~~UIデザイントークン（20章）が`GrammarCategories.tsx`・`Login.tsx`・`AuthCallback.tsx`に未適用（20260811）~~ **解決済み（20260811）**: 20.4の通り残り3画面にも適用し、全9画面で統一済み。
 - **AIチューター機能（22章）のEdge Function Secrets設定・クラウドデプロイが未実施（20260811）**: コード・ローカルマイグレーションまでは完了しているが、実際の`GEMINI_API_KEY`をEdge Function Secretsに設定する操作と`ask-tutor`のクラウドデプロイはCLAUDE.mdの「外部APIキーが絡む操作」に該当するため未実施（22.8）。ローカルでの動作確認（`supabase functions serve`）も、ユーザー自身のGemini APIキーを`supabase/functions/.env`に設定してもらう必要がある。
+- **文法問題1件が構造的欠陥のためエスカレートされたまま未対応（20260812発見、`subjunctive`/difficulty=3、`generation_batch_items.id=1b18eb14-6285-4160-a87f-5ff2560091e6`、`needs_review`のまま）**: 「Were the director ___ to offer a higher salary...」という倒置仮定法の設問で、選択肢（is/were/to be/be）のどれを入れても非文になる（空所自体が不要な設問テンプレート）。再生成するか、このまま`grammar_questions`に反映しないまま放棄するか未確定。`subjunctive`/difficulty=3は14/15件のまま運用しても実害は小さいと判断し緊急対応はしていない。
+- **`commitBatch.ts`の`resolveCategoryId`がcategory_codeの略称ゆれを救済しない（20260812発見）**: Geminiが`comparison`を`"COMP"`のように省略して出力すると、casing正規化（`toLowerCase()`）では救済できず、バッチ全体が`needs_review`に落ちて原因不明の`[object Object]`エラーになる（実例: 20260810の文法バックフィル、`comparison`/difficulty=5の10件全てがこれで足止めされた）。`grammar_categories`の全codeに対する軽量なfuzzy match、またはプロンプト側で許容する`category_code`の形式をより厳密に指定する、といった対策を検討する。
+- **語彙タグ「Part7頻出」が目安30〜50語を下回ったまま（20260812、現在26語）**: 20260810のバックフィル時、2バッチ目がビジネスタグの既存語と大きく重複し、目安を下回る結果になった。追加バッチ（Gemini API呼び出しを伴う）を打つかは未確認——このまま運用するか、次回の語彙関連作業とあわせて追加生成するか判断する。
