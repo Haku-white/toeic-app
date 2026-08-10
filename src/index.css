@@ -1,0 +1,63 @@
+@import "tailwindcss";
+
+/**
+ * 「計器盤」デザイントークン（DESIGN.md 20章参照）。
+ * neutral/redはTailwind組み込みスケールの値を上書きしているため、既存の
+ * bg-neutral, text-neutral, border-neutral 系のclassNameは無改修で新配色を継承する。
+ * accent/correct/incorrectは完全新規の意味的トークン。
+ */
+@theme {
+  /* ベース/文字色: ウォームホワイト→ダークネイビー */
+  --color-neutral-50: #FAFAF8;
+  --color-neutral-100: #F3F2EE;
+  --color-neutral-200: #E6E4DD;
+  --color-neutral-300: #D1CFC5;
+  --color-neutral-400: #A7A499;
+  --color-neutral-500: #7D7A70;
+  --color-neutral-600: #58564F;
+  --color-neutral-700: #3D3C42;
+  --color-neutral-800: #262A3E;
+  --color-neutral-900: #1E2338;
+
+  /* メインアクセント: 深みのある紫（ボタン・進捗・フォーカスリング等、絞って使用） */
+  --color-accent-50: #F4F2FA;
+  --color-accent-100: #E9E4F4;
+  --color-accent-200: #D2C7E9;
+  --color-accent-300: #B5A4D8;
+  --color-accent-400: #9680C2;
+  --color-accent-500: #7860A5;
+  --color-accent-600: #5B4B8A;
+  --color-accent-700: #493C6F;
+  --color-accent-800: #372D54;
+  --color-accent-900: #251F39;
+
+  /* 正答フィードバック: 落ち着いた深緑（20260812変更: 直感に反するとの指摘で琥珀色から変更。彩度は抑えめ） */
+  --color-correct-50: #F2F7F4;
+  --color-correct-100: #DFECE3;
+  --color-correct-200: #BFD9C8;
+  --color-correct-300: #99C2A7;
+  --color-correct-400: #70A983;
+  --color-correct-500: #58936C;
+  --color-correct-600: #4A7C59;
+  --color-correct-700: #3B6348;
+  --color-correct-800: #2C4936;
+  --color-correct-900: #1F3325;
+
+  /* 誤答フィードバック/警告: 赤茶（既存red-*の置き換え） */
+  --color-incorrect-50: #FBEEEC;
+  --color-incorrect-100: #F5D9D5;
+  --color-incorrect-200: #E9B3AB;
+  --color-incorrect-300: #DB8880;
+  --color-incorrect-400: #C7645A;
+  --color-incorrect-500: #B8534A;
+  --color-incorrect-600: #A8453D;
+  --color-incorrect-700: #86372F;
+  --color-incorrect-800: #642926;
+  --color-incorrect-900: #42201C;
+
+  /* タイポグラフィ: 役割別3書体。Webフォント読み込み無し（システムフォントのみ） */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Yu Gothic",
+    "Segoe UI", sans-serif;
+  --font-serif: Georgia, "Iowan Old Style", "Palatino Linotype", "Hiragino Mincho ProN", serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+}
