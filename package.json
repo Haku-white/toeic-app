@@ -16,6 +16,7 @@
     "db:stop": "supabase stop",
     "db:reset": "supabase db reset",
     "db:diff": "supabase db diff",
+    "db:backup": "bash scripts/backup-db.sh",
     "content:generate-grammar": "tsx scripts/content-generation/generate_grammar.ts",
     "content:generate-vocab": "tsx scripts/content-generation/generate_vocab.ts",
     "content:validate": "tsx scripts/content-generation/validate_batch.ts",
