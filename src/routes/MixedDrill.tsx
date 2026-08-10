@@ -8,7 +8,7 @@ import { getMixedDrillQuestions, mapMixedDrillAnswerToRating, type MixedQuestion
 import { useMixedDrillSessionStore } from '../stores/mixedDrillSessionStore'
 import AskTutorPanel from '../components/AskTutorPanel'
 
-const CHOICE_LABELS = ['A', 'B', 'C', 'D']
+const CHOICE_LABELS = ['1', '2', '3', '4']
 const GRAMMAR_COUNT = 5
 const VOCAB_COUNT = 5
 
@@ -223,7 +223,7 @@ export default function MixedDrill() {
         )}
       </div>
 
-      <p className="font-mono text-xs text-neutral-400">A〜D: 選択 / Enter: 次へ</p>
+      <p className="font-mono text-xs text-neutral-400">1〜4: 選択 / Enter: 次へ</p>
     </div>
   )
 }

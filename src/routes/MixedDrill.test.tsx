@@ -156,21 +156,21 @@ describe('MixedDrill', () => {
   it('shows the keyboard-shortcut hint', async () => {
     vi.mocked(getMixedDrillQuestions).mockResolvedValue(questions)
     renderMixedDrill()
-    expect(await screen.findByText('A〜D: 選択 / Enter: 次へ')).toBeInTheDocument()
+    expect(await screen.findByText('1〜4: 選択 / Enter: 次へ')).toBeInTheDocument()
   })
 
-  it('selects a choice via the A-D keys (case-insensitive) and highlights it', async () => {
+  it('selects a choice via the 1-4 keys and highlights it', async () => {
     vi.mocked(getMixedDrillQuestions).mockResolvedValue(questions)
     renderMixedDrill()
 
     expect(await screen.findByText('The company ___ its report by Friday.')).toBeInTheDocument()
 
-    // 'b' (index 1, "submits") を小文字で入力してもケース非依存で反応すること
-    fireEvent.keyDown(window, { key: 'b' })
+    // '2' (index 1, "submits") を入力する
+    fireEvent.keyDown(window, { key: '2' })
 
     expect(await screen.findByText('未来完了形を使う。')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /will have submitted/ })).toHaveClass('border-correct-600')
-    expect(screen.getByRole('button', { name: /^B submits$/ })).toHaveClass('border-incorrect-600')
+    expect(screen.getByRole('button', { name: /^2 submits$/ })).toHaveClass('border-incorrect-600')
     await waitFor(() => expect(submitGrammarAttempt).toHaveBeenCalledTimes(1))
   })
 
@@ -191,7 +191,7 @@ describe('MixedDrill', () => {
     renderMixedDrill()
 
     expect(await screen.findByText('The company ___ its report by Friday.')).toBeInTheDocument()
-    fireEvent.keyDown(window, { key: 'A' })
+    fireEvent.keyDown(window, { key: '1' })
     expect(await screen.findByText('未来完了形を使う。')).toBeInTheDocument()
 
     fireEvent.keyDown(window, { key: 'Enter' })

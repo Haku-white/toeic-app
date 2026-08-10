@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { Link, useLoaderData, useParams } from 'react-router-dom'
 import type { Session } from '@supabase/supabase-js'
 import { useMutation, useQuery } from '@tanstack/react-query'
@@ -14,6 +14,7 @@ const RATING_LABELS: Record<FsrsRatingKey, string> = {
   easy: '簡単',
 }
 const RATING_ORDER: FsrsRatingKey[] = ['again', 'hard', 'good', 'easy']
+const RATING_KEY_HINTS = ['1', '2', '3', '4']
 
 function formatIntervalPreview(scheduledDays: number): string {
   if (scheduledDays < 1) {
@@ -64,19 +65,36 @@ export default function VocabReview() {
     reveal()
   }
 
-  function handleRate(rating: FsrsRatingKey) {
-    if (!currentCard) return
-    const revealedAt = revealedAtRef.current
-    const now = Date.now()
-    const responseTimeMs = revealedAt ? now - revealedAt : undefined
-    mutation.mutate({
-      userId,
-      vocabWordId: currentCard.vocabWordId,
-      currentProgress: currentCard.progress,
-      rating,
-      responseTimeMs,
-    })
-  }
+  const handleRate = useCallback(
+    (rating: FsrsRatingKey) => {
+      if (!currentCard) return
+      const revealedAt = revealedAtRef.current
+      const now = Date.now()
+      const responseTimeMs = revealedAt ? now - revealedAt : undefined
+      mutation.mutate({
+        userId,
+        vocabWordId: currentCard.vocabWordId,
+        currentProgress: currentCard.progress,
+        rating,
+        responseTimeMs,
+      })
+    },
+    [currentCard, mutation, userId],
+  )
+
+  // 1〜4キーで評価を選ぶ（答えを見た後のみ。ここでは選択が即送信+次へ進む一手のため、
+  // GrammarDrill/MixedDrillと異なりEnterキーでの「次へ」は無い）。
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (!currentCard || !isRevealed || mutation.isPending) return
+      const index = RATING_KEY_HINTS.indexOf(event.key)
+      if (index !== -1) {
+        handleRate(RATING_ORDER[index])
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [currentCard, isRevealed, mutation.isPending, handleRate])
 
   if (isLoading) {
     return (
@@ -170,7 +188,7 @@ export default function VocabReview() {
             />
 
             <div className="grid grid-cols-4 gap-2 pt-4">
-              {RATING_ORDER.map((rating) => {
+              {RATING_ORDER.map((rating, index) => {
                 const preview = computeNextState(currentCard!.progress, rating)
                 return (
                   <button
@@ -179,7 +197,10 @@ export default function VocabReview() {
                     onClick={() => handleRate(rating)}
                     className="flex flex-col items-center gap-1 rounded border border-neutral-300 py-2 text-xs font-medium text-neutral-700 transition-colors hover:border-accent-300 hover:bg-neutral-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500 disabled:opacity-50"
                   >
-                    <span>{RATING_LABELS[rating]}</span>
+                    <span className="flex items-center gap-1">
+                      <span>{RATING_LABELS[rating]}</span>
+                      <span className="font-mono text-xs text-neutral-400">{RATING_KEY_HINTS[index]}</span>
+                    </span>
                     <span className="font-mono text-[10px] tabular-nums text-neutral-400">
                       {formatIntervalPreview(preview.progress.scheduledDays)}
                     </span>
@@ -190,6 +211,8 @@ export default function VocabReview() {
           </div>
         )}
       </div>
+
+      <p className="font-mono text-xs text-neutral-400">1〜4: 評価（答えを見た後）</p>
     </div>
   )
 }

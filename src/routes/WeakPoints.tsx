@@ -1,4 +1,5 @@
 import { Link, useLoaderData } from 'react-router-dom'
+import { useMemo } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -7,6 +8,7 @@ import {
   type GrammarCategoryStat,
   type VocabTagStat,
 } from '../lib/queries/weakPoints'
+import { assignShortcutKeys, useMenuShortcuts } from '../lib/useMenuShortcuts'
 
 /** 9.6の方針: 正答率70%未満を警告色で強調する */
 const WARNING_THRESHOLD = 0.7
@@ -53,11 +55,13 @@ function StatRow({
   totalAttempts,
   accuracyRate,
   to,
+  shortcutKey,
 }: {
   label: string
   totalAttempts: number
   accuracyRate: number
   to: string
+  shortcutKey: string | null
 }) {
   const isWeak = accuracyRate < WARNING_THRESHOLD
   return (
@@ -67,7 +71,14 @@ function StatRow({
         isWeak ? 'border-incorrect-300 bg-incorrect-50 text-incorrect-900' : 'border-neutral-200 bg-white text-neutral-800'
       }`}
     >
-      <span className="font-medium">{label}</span>
+      <span className="flex items-center gap-2">
+        <span className="font-medium">{label}</span>
+        {shortcutKey && (
+          <span className="rounded border border-neutral-300 px-1 font-mono text-xs text-neutral-500">
+            {shortcutKey}
+          </span>
+        )}
+      </span>
       <span className="flex items-center gap-2">
         <Gauge value={accuracyRate} isWeak={isWeak} />
         <span className={`font-mono text-sm tabular-nums ${isWeak ? 'text-incorrect-700' : 'text-correct-700'}`}>
@@ -94,6 +105,19 @@ export default function WeakPoints() {
 
   const isLoading = grammarQuery.isLoading || vocabQuery.isLoading
   const isError = grammarQuery.isError || vocabQuery.isError
+
+  // 文法セクション→語彙セクション→戻るリンクの順で1つの連番シーケンスとして扱う（DOM順どおり）。
+  // isLoading/isErrorの早期returnより前でHooksを呼ぶ必要があるため、未取得の間は`?? []`で対応する。
+  const shortcutItems = useMemo(
+    () =>
+      assignShortcutKeys([
+        ...(grammarQuery.data ?? []).map((stat) => ({ to: `/grammar/${stat.categoryCode}` })),
+        ...(vocabQuery.data ?? []).map((stat) => ({ to: `/vocab/review/${encodeURIComponent(stat.tagCode)}` })),
+        { to: '/' },
+      ]),
+    [grammarQuery.data, vocabQuery.data],
+  )
+  useMenuShortcuts(shortcutItems)
 
   if (isLoading) {
     return (
@@ -128,13 +152,14 @@ export default function WeakPoints() {
             <p className="text-sm text-neutral-500">まだ解答データがありません。</p>
           ) : (
             <div className="space-y-2">
-              {grammarStats.map((stat) => (
+              {grammarStats.map((stat, index) => (
                 <StatRow
                   key={stat.categoryId}
                   label={stat.categoryName}
                   totalAttempts={stat.totalAttempts}
                   accuracyRate={stat.accuracyRate}
                   to={`/grammar/${stat.categoryCode}`}
+                  shortcutKey={shortcutItems[index].shortcutKey}
                 />
               ))}
             </div>
@@ -147,13 +172,14 @@ export default function WeakPoints() {
             <p className="text-sm text-neutral-500">まだレビューデータがありません。</p>
           ) : (
             <div className="space-y-2">
-              {vocabStats.map((stat) => (
+              {vocabStats.map((stat, index) => (
                 <StatRow
                   key={stat.tagId}
                   label={stat.tagName}
                   totalAttempts={stat.totalReviews}
                   accuracyRate={stat.accuracyRate}
                   to={`/vocab/review/${encodeURIComponent(stat.tagCode)}`}
+                  shortcutKey={shortcutItems[grammarStats.length + index].shortcutKey}
                 />
               ))}
             </div>
@@ -166,6 +192,11 @@ export default function WeakPoints() {
         className="text-sm text-neutral-500 underline transition-colors hover:text-accent-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500"
       >
         ホームに戻る
+        {shortcutItems[shortcutItems.length - 1]?.shortcutKey && (
+          <span className="ml-1 rounded border border-neutral-300 px-1 font-mono text-xs text-neutral-500">
+            {shortcutItems[shortcutItems.length - 1]?.shortcutKey}
+          </span>
+        )}
       </Link>
     </div>
   )

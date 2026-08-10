@@ -6,7 +6,7 @@ import { getGrammarDrillData, submitGrammarAttempt } from '../lib/queries/gramma
 import { useGrammarSessionStore } from '../stores/grammarSessionStore'
 import AskTutorPanel from '../components/AskTutorPanel'
 
-const CHOICE_LABELS = ['A', 'B', 'C', 'D']
+const CHOICE_LABELS = ['1', '2', '3', '4']
 
 export default function GrammarDrill() {
   const { session } = useLoaderData() as { session: Session }
@@ -194,7 +194,7 @@ export default function GrammarDrill() {
         )}
       </div>
 
-      <p className="font-mono text-xs text-neutral-400">A〜D: 選択 / Enter: 次へ</p>
+      <p className="font-mono text-xs text-neutral-400">1〜4: 選択 / Enter: 次へ</p>
     </div>
   )
 }

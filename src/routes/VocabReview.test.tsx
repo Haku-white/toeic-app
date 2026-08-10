@@ -132,4 +132,68 @@ describe('VocabReview', () => {
       '/weak-points',
     )
   })
+
+  it('shows the keyboard-shortcut hint', async () => {
+    vi.mocked(getDueVocabCards).mockResolvedValue([sampleCard])
+    renderVocabReview()
+    expect(await screen.findByText('1〜4: 評価（答えを見た後）')).toBeInTheDocument()
+  })
+
+  it('rates the card via the 1-4 keys once revealed (e.g. "3" -> good)', async () => {
+    vi.mocked(getDueVocabCards).mockResolvedValue([sampleCard])
+    vi.mocked(submitVocabReview).mockResolvedValue({
+      state: 'learning',
+      dueAt: new Date().toISOString(),
+      stability: 1,
+      difficulty: 5,
+      elapsedDays: 0,
+      scheduledDays: 1,
+      reps: 1,
+      lapses: 0,
+      lastReviewAt: new Date().toISOString(),
+    })
+
+    renderVocabReview()
+    fireEvent.click(await screen.findByRole('button', { name: '答えを見る' }))
+    expect(await screen.findByText('交渉する')).toBeInTheDocument()
+
+    // RATING_ORDER = ['again', 'hard', 'good', 'easy'] -> index 2 ("3") is "good"
+    fireEvent.keyDown(window, { key: '3' })
+
+    await waitFor(() => expect(submitVocabReview).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(submitVocabReview).mock.calls[0][0]).toMatchObject({
+      userId: 'user-1',
+      vocabWordId: 'word-1',
+      rating: 'good',
+    })
+    expect(await screen.findByText('セッション完了')).toBeInTheDocument()
+  })
+
+  it('does not react to the 1-4 keys before the answer is revealed', async () => {
+    vi.mocked(getDueVocabCards).mockResolvedValue([sampleCard])
+    renderVocabReview()
+
+    expect(await screen.findByText('negotiate')).toBeInTheDocument()
+    fireEvent.keyDown(window, { key: '1' })
+
+    expect(submitVocabReview).not.toHaveBeenCalled()
+    // 答えを見る前なので画面は変わっていない
+    expect(screen.queryByText('交渉する')).not.toBeInTheDocument()
+  })
+
+  it('ignores the 1-4 keys while a rating mutation is still pending', async () => {
+    vi.mocked(getDueVocabCards).mockResolvedValue([sampleCard])
+    vi.mocked(submitVocabReview).mockReturnValue(new Promise(() => {})) // 解決しないままにする
+
+    renderVocabReview()
+    fireEvent.click(await screen.findByRole('button', { name: '答えを見る' }))
+    expect(await screen.findByText('交渉する')).toBeInTheDocument()
+
+    fireEvent.keyDown(window, { key: '1' })
+    await waitFor(() => expect(submitVocabReview).toHaveBeenCalledTimes(1))
+
+    // ミューテーションが未解決(pending)のまま2回目のキー入力をしても追加送信されない
+    fireEvent.keyDown(window, { key: '2' })
+    expect(submitVocabReview).toHaveBeenCalledTimes(1)
+  })
 })
