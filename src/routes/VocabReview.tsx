@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef } from 'react'
-import { Link, useLoaderData, useParams } from 'react-router-dom'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Link, useLoaderData, useNavigate, useParams } from 'react-router-dom'
 import type { Session } from '@supabase/supabase-js'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { getDueVocabCards, getVocabTagByCode, submitVocabReview } from '../lib/queries/vocab'
@@ -28,6 +28,7 @@ export default function VocabReview() {
   const { session } = useLoaderData() as { session: Session }
   const { tagCode } = useParams<{ tagCode?: string }>()
   const userId = session.user.id
+  const navigate = useNavigate()
   // タグ絞り込みが無い場合は "/" へ、weak-pointsから来た場合(タグ指定あり)はそこへ戻す
   const backTo = tagCode ? '/weak-points' : '/'
   const backLabel = tagCode ? '弱点分析ダッシュボードに戻る' : 'ホームに戻る'
@@ -47,6 +48,9 @@ export default function VocabReview() {
 
   const { currentIndex, isRevealed, reviewedCount, reveal, advance, resetSession } = useVocabSessionStore()
   const revealedAtRef = useRef<number | null>(null)
+  // AskTutorPanelのテキストエリアにフォーカスがある間は、Enterがショートカット「答えを見る」
+  // ではなく質問送信に使われる（26章）。下部のヒント表示をそれに合わせて切り替えるための状態。
+  const [isAskingTutor, setIsAskingTutor] = useState(false)
 
   useEffect(() => {
     resetSession()
@@ -59,11 +63,12 @@ export default function VocabReview() {
   })
 
   const currentCard = cards?.[currentIndex]
+  const isSessionComplete = !!cards && cards.length > 0 && currentIndex >= cards.length
 
-  function handleReveal() {
+  const handleReveal = useCallback(() => {
     revealedAtRef.current = Date.now()
     reveal()
-  }
+  }, [reveal])
 
   const handleRate = useCallback(
     (rating: FsrsRatingKey) => {
@@ -82,11 +87,24 @@ export default function VocabReview() {
     [currentCard, mutation, userId],
   )
 
-  // 1〜4キーで評価を選ぶ（答えを見た後のみ。ここでは選択が即送信+次へ進む一手のため、
-  // GrammarDrill/MixedDrillと異なりEnterキーでの「次へ」は無い）。
+  // 答えを見る前はEnterキーで「答えを見る」を実行できるようにする（以前はここに
+  // キーボード操作が一切無く、キーボードのみでの操作がここで行き詰まっていた）。
+  // 答えを見た後は1〜4キーで評価を選ぶ——選択が即送信+次へ進む一手のため、
+  // GrammarDrill/MixedDrillと異なりEnterキーでの「次へ」は無い（25章参照）。
+  // セッション完了画面ではcurrentCardがundefinedになる（配列範囲外）ため、
+  // 個別に判定してEnterで戻るリンクへ遷移できるようにする。
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
-      if (!currentCard || !isRevealed || mutation.isPending) return
+      if (isSessionComplete) {
+        if (event.key === 'Enter') navigate(backTo)
+        return
+      }
+      if (!currentCard) return
+      if (!isRevealed) {
+        if (event.key === 'Enter') handleReveal()
+        return
+      }
+      if (mutation.isPending) return
       const index = RATING_KEY_HINTS.indexOf(event.key)
       if (index !== -1) {
         handleRate(RATING_ORDER[index])
@@ -94,7 +112,7 @@ export default function VocabReview() {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [currentCard, isRevealed, mutation.isPending, handleRate])
+  }, [isSessionComplete, currentCard, isRevealed, mutation.isPending, handleRate, handleReveal, navigate, backTo])
 
   if (isLoading) {
     return (
@@ -141,6 +159,7 @@ export default function VocabReview() {
         >
           {backLabel}
         </Link>
+        <p className="font-mono text-xs text-neutral-400">Enter: {backLabel}</p>
       </div>
     )
   }
@@ -185,6 +204,7 @@ export default function VocabReview() {
               questionText={`${currentCard!.word}: ${currentCard!.exampleSentenceEn}`}
               correctAnswer={currentCard!.meaningJa}
               explanation={currentCard!.etymologyNote ?? ''}
+              onFocusChange={setIsAskingTutor}
             />
 
             <div className="grid grid-cols-4 gap-2 pt-4">
@@ -212,7 +232,13 @@ export default function VocabReview() {
         )}
       </div>
 
-      <p className="font-mono text-xs text-neutral-400">1〜4: 評価（答えを見た後）</p>
+      <p className="font-mono text-xs text-neutral-400">
+        {isRevealed
+          ? isAskingTutor
+            ? 'Enter: 質問を送信 / Shift+Enter: 改行'
+            : '1〜4: 評価'
+          : 'Enter: 答えを見る'}
+      </p>
     </div>
   )
 }

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef } from 'react'
-import { Link, useLoaderData } from 'react-router-dom'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Link, useLoaderData, useNavigate } from 'react-router-dom'
 import type { Session } from '@supabase/supabase-js'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { submitGrammarAttempt } from '../lib/queries/grammar'
@@ -11,10 +11,12 @@ import AskTutorPanel from '../components/AskTutorPanel'
 const CHOICE_LABELS = ['1', '2', '3', '4']
 const GRAMMAR_COUNT = 5
 const VOCAB_COUNT = 5
+const COMPLETE_SCREEN_LINK_TO = '/'
 
 export default function MixedDrill() {
   const { session } = useLoaderData() as { session: Session }
   const userId = session.user.id
+  const navigate = useNavigate()
 
   const { data: questions, isLoading, isError, error } = useQuery({
     queryKey: ['mixed-drill', userId],
@@ -33,6 +35,9 @@ export default function MixedDrill() {
     resetSession,
   } = useMixedDrillSessionStore()
   const questionStartRef = useRef<number>(Date.now())
+  // AskTutorPanelのテキストエリアにフォーカスがある間は、Enterがショートカット「次へ」ではなく
+  // 質問送信に使われる（26章）。下部のヒント表示をそれに合わせて切り替えるための状態。
+  const [isAskingTutor, setIsAskingTutor] = useState(false)
 
   useEffect(() => {
     resetSession()
@@ -47,6 +52,7 @@ export default function MixedDrill() {
   const vocabMutation = useMutation({ mutationFn: submitVocabReview })
 
   const currentQuestion = questions?.[currentIndex]
+  const isSessionComplete = !!questions && questions.length > 0 && currentIndex >= questions.length
 
   const handleAnswer = useCallback(
     (index: number, question: MixedQuestion) => {
@@ -78,10 +84,16 @@ export default function MixedDrill() {
     [selectedIndex, answer, grammarMutation, vocabMutation, userId],
   )
 
-  // A〜Dキーで選択肢を選び、選択済みならEnterキーで次の問題へ進めるようにする
-  // （マウス操作は変更せず併用可能。読み込み中/結果画面などcurrentQuestionが無い間は無視する）。
+  // 1〜4キーで選択肢を選び、選択済みならEnterキーで次の問題へ進めるようにする
+  // （マウス操作は変更せず併用可能。読み込み中/エラー時など問題が無い間は無視する）。
+  // セッション完了画面ではcurrentQuestionがundefinedになる（配列範囲外）ため、
+  // 個別に判定してEnterで「ホームに戻る」へ遷移できるようにする（25章参照）。
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
+      if (isSessionComplete) {
+        if (event.key === 'Enter') navigate(COMPLETE_SCREEN_LINK_TO)
+        return
+      }
       if (!currentQuestion) return
       if (selectedIndex === null) {
         const index = CHOICE_LABELS.indexOf(event.key.toUpperCase())
@@ -94,7 +106,7 @@ export default function MixedDrill() {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [currentQuestion, selectedIndex, advance, handleAnswer])
+  }, [isSessionComplete, currentQuestion, selectedIndex, advance, handleAnswer, navigate])
 
   if (isLoading) {
     return (
@@ -152,6 +164,7 @@ export default function MixedDrill() {
         >
           ホームに戻る
         </Link>
+        <p className="font-mono text-xs text-neutral-400">Enter: ホームに戻る</p>
       </div>
     )
   }
@@ -212,6 +225,7 @@ export default function MixedDrill() {
               choices={question.choices}
               correctAnswer={question.choices[question.correctIndex]}
               explanation={question.explanation ?? ''}
+              onFocusChange={setIsAskingTutor}
             />
             <button
               onClick={advance}
@@ -223,7 +237,9 @@ export default function MixedDrill() {
         )}
       </div>
 
-      <p className="font-mono text-xs text-neutral-400">1〜4: 選択 / Enter: 次へ</p>
+      <p className="font-mono text-xs text-neutral-400">
+        {isAskingTutor ? 'Enter: 質問を送信 / Shift+Enter: 改行' : '1〜4: 選択 / Enter: 次へ'}
+      </p>
     </div>
   )
 }

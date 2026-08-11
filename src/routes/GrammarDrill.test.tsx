@@ -28,6 +28,8 @@ function renderGrammarDrill() {
         element: <GrammarDrill />,
         loader: () => ({ session: fakeSession }),
       },
+      // セッション完了画面からのEnterキー遷移先(/grammar)確認用のスタブ
+      { path: '/grammar', element: <div>文法カテゴリ</div> },
     ],
     { initialEntries: ['/grammar/tense'] },
   )
@@ -135,6 +137,24 @@ describe('GrammarDrill', () => {
     expect(await screen.findByText('1〜4: 選択 / Enter: 次へ')).toBeInTheDocument()
   })
 
+  it('changes the keyboard-shortcut hint while asking the tutor a question (26章)', async () => {
+    vi.mocked(getGrammarDrillData).mockResolvedValue(drillData)
+    renderGrammarDrill()
+
+    fireEvent.click(await screen.findByRole('button', { name: /will have submitted/ }))
+    expect(await screen.findByText('1〜4: 選択 / Enter: 次へ')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /もっと詳しく聞く/ }))
+    const textarea = screen.getByPlaceholderText(/この問題について質問する/)
+    fireEvent.focus(textarea)
+
+    expect(screen.getByText('Enter: 質問を送信 / Shift+Enter: 改行')).toBeInTheDocument()
+    expect(screen.queryByText('1〜4: 選択 / Enter: 次へ')).not.toBeInTheDocument()
+
+    fireEvent.blur(textarea)
+    expect(await screen.findByText('1〜4: 選択 / Enter: 次へ')).toBeInTheDocument()
+  })
+
   it('selects a choice via the 1-4 keys and highlights it', async () => {
     vi.mocked(getGrammarDrillData).mockResolvedValue(drillData)
     renderGrammarDrill()
@@ -185,5 +205,26 @@ describe('GrammarDrill', () => {
 
     expect(screen.queryByText('未来完了形を使う。')).not.toBeInTheDocument()
     expect(submitGrammarAttempt).not.toHaveBeenCalled()
+  })
+
+  it('navigates back to the category list via Enter on the session-complete screen (25章: keyboard-only flow to the end)', async () => {
+    vi.mocked(getGrammarDrillData).mockResolvedValue(drillData)
+    renderGrammarDrill()
+
+    expect(await screen.findByText('The company ___ its report by Friday.')).toBeInTheDocument()
+    fireEvent.keyDown(window, { key: '1' })
+    await waitFor(() => expect(submitGrammarAttempt).toHaveBeenCalledTimes(1))
+    fireEvent.keyDown(window, { key: 'Enter' })
+
+    expect(await screen.findByText('She ___ here since 2020.')).toBeInTheDocument()
+    fireEvent.keyDown(window, { key: '2' })
+    await waitFor(() => expect(submitGrammarAttempt).toHaveBeenCalledTimes(2))
+    fireEvent.keyDown(window, { key: 'Enter' })
+
+    expect(await screen.findByText('セッション完了')).toBeInTheDocument()
+    expect(screen.getByText('Enter: カテゴリ一覧に戻る')).toBeInTheDocument()
+
+    fireEvent.keyDown(window, { key: 'Enter' })
+    expect(await screen.findByText('文法カテゴリ')).toBeInTheDocument()
   })
 })

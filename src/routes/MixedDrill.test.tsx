@@ -39,6 +39,8 @@ function renderMixedDrill() {
         element: <MixedDrill />,
         loader: () => ({ session: fakeSession }),
       },
+      // セッション完了画面からのEnterキー遷移先(/)確認用のスタブ
+      { path: '/', element: <div>ホーム画面</div> },
     ],
     { initialEntries: ['/mixed-drill'] },
   )
@@ -159,6 +161,24 @@ describe('MixedDrill', () => {
     expect(await screen.findByText('1〜4: 選択 / Enter: 次へ')).toBeInTheDocument()
   })
 
+  it('changes the keyboard-shortcut hint while asking the tutor a question (26章)', async () => {
+    vi.mocked(getMixedDrillQuestions).mockResolvedValue(questions)
+    renderMixedDrill()
+
+    fireEvent.click(await screen.findByRole('button', { name: /will have submitted/ }))
+    expect(await screen.findByText('1〜4: 選択 / Enter: 次へ')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /もっと詳しく聞く/ }))
+    const textarea = screen.getByPlaceholderText(/この問題について質問する/)
+    fireEvent.focus(textarea)
+
+    expect(screen.getByText('Enter: 質問を送信 / Shift+Enter: 改行')).toBeInTheDocument()
+    expect(screen.queryByText('1〜4: 選択 / Enter: 次へ')).not.toBeInTheDocument()
+
+    fireEvent.blur(textarea)
+    expect(await screen.findByText('1〜4: 選択 / Enter: 次へ')).toBeInTheDocument()
+  })
+
   it('selects a choice via the 1-4 keys and highlights it', async () => {
     vi.mocked(getMixedDrillQuestions).mockResolvedValue(questions)
     renderMixedDrill()
@@ -197,5 +217,26 @@ describe('MixedDrill', () => {
     fireEvent.keyDown(window, { key: 'Enter' })
 
     expect(await screen.findByText('「negotiate」の意味として最も適切なものを選んでください。')).toBeInTheDocument()
+  })
+
+  it('navigates home via Enter on the session-complete screen (25章: keyboard-only flow to the end)', async () => {
+    vi.mocked(getMixedDrillQuestions).mockResolvedValue(questions)
+    renderMixedDrill()
+
+    expect(await screen.findByText('The company ___ its report by Friday.')).toBeInTheDocument()
+    fireEvent.keyDown(window, { key: '1' })
+    await waitFor(() => expect(submitGrammarAttempt).toHaveBeenCalledTimes(1))
+    fireEvent.keyDown(window, { key: 'Enter' })
+
+    expect(await screen.findByText('「negotiate」の意味として最も適切なものを選んでください。')).toBeInTheDocument()
+    fireEvent.keyDown(window, { key: '1' })
+    await waitFor(() => expect(submitVocabReview).toHaveBeenCalledTimes(1))
+    fireEvent.keyDown(window, { key: 'Enter' })
+
+    expect(await screen.findByText('セッション完了')).toBeInTheDocument()
+    expect(screen.getByText('Enter: ホームに戻る')).toBeInTheDocument()
+
+    fireEvent.keyDown(window, { key: 'Enter' })
+    expect(await screen.findByText('ホーム画面')).toBeInTheDocument()
   })
 })

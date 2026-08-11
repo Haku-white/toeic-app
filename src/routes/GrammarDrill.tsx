@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef } from 'react'
-import { Link, useLoaderData, useParams } from 'react-router-dom'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Link, useLoaderData, useNavigate, useParams } from 'react-router-dom'
 import type { Session } from '@supabase/supabase-js'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { getGrammarDrillData, submitGrammarAttempt } from '../lib/queries/grammar'
@@ -7,11 +7,13 @@ import { useGrammarSessionStore } from '../stores/grammarSessionStore'
 import AskTutorPanel from '../components/AskTutorPanel'
 
 const CHOICE_LABELS = ['1', '2', '3', '4']
+const COMPLETE_SCREEN_LINK_TO = '/grammar'
 
 export default function GrammarDrill() {
   const { session } = useLoaderData() as { session: Session }
   const { categoryCode } = useParams<{ categoryCode: string }>()
   const userId = session.user.id
+  const navigate = useNavigate()
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['grammar-drill', categoryCode],
@@ -22,6 +24,9 @@ export default function GrammarDrill() {
   const { currentIndex, selectedIndex, correctCount, answeredCount, answer, advance, resetSession } =
     useGrammarSessionStore()
   const questionStartRef = useRef<number>(Date.now())
+  // AskTutorPanelのテキストエリアにフォーカスがある間は、Enterがショートカット「次へ」ではなく
+  // 質問送信に使われる（26章）。下部のヒント表示をそれに合わせて切り替えるための状態。
+  const [isAskingTutor, setIsAskingTutor] = useState(false)
 
   useEffect(() => {
     resetSession()
@@ -36,6 +41,7 @@ export default function GrammarDrill() {
 
   const questions = data?.questions
   const currentQuestion = questions?.[currentIndex]
+  const isSessionComplete = !!questions && questions.length > 0 && currentIndex >= questions.length
 
   const handleAnswer = useCallback(
     (index: number) => {
@@ -55,10 +61,17 @@ export default function GrammarDrill() {
     [currentQuestion, selectedIndex, answer, mutation, userId],
   )
 
-  // A〜Dキーで選択肢を選び、選択済みならEnterキーで次の問題へ進めるようにする
-  // （マウス操作は変更せず併用可能。読み込み中/結果画面などcurrentQuestionが無い間は無視する）。
+  // 1〜4キーで選択肢を選び、選択済みならEnterキーで次の問題へ進めるようにする
+  // （マウス操作は変更せず併用可能。読み込み中/エラー時など問題が無い間は無視する）。
+  // セッション完了画面ではcurrentQuestionがundefinedになる（配列範囲外）ため、
+  // 個別に判定してEnterで「カテゴリ一覧に戻る」へ遷移できるようにする
+  // （25章: 以前はここが手薄でキーボードのみでの操作が完結していなかった）。
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
+      if (isSessionComplete) {
+        if (event.key === 'Enter') navigate(COMPLETE_SCREEN_LINK_TO)
+        return
+      }
       if (!currentQuestion) return
       if (selectedIndex === null) {
         const index = CHOICE_LABELS.indexOf(event.key.toUpperCase())
@@ -71,7 +84,7 @@ export default function GrammarDrill() {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [currentQuestion, selectedIndex, advance, handleAnswer])
+  }, [isSessionComplete, currentQuestion, selectedIndex, advance, handleAnswer, navigate])
 
   if (isLoading) {
     return (
@@ -126,6 +139,7 @@ export default function GrammarDrill() {
             ホームに戻る
           </Link>
         </div>
+        <p className="font-mono text-xs text-neutral-400">Enter: カテゴリ一覧に戻る</p>
       </div>
     )
   }
@@ -183,6 +197,7 @@ export default function GrammarDrill() {
               choices={currentQuestion!.choices}
               correctAnswer={currentQuestion!.choices[currentQuestion!.correctIndex]}
               explanation={currentQuestion!.explanation ?? ''}
+              onFocusChange={setIsAskingTutor}
             />
             <button
               onClick={advance}
@@ -194,7 +209,9 @@ export default function GrammarDrill() {
         )}
       </div>
 
-      <p className="font-mono text-xs text-neutral-400">1〜4: 選択 / Enter: 次へ</p>
+      <p className="font-mono text-xs text-neutral-400">
+        {isAskingTutor ? 'Enter: 質問を送信 / Shift+Enter: 改行' : '1〜4: 選択 / Enter: 次へ'}
+      </p>
     </div>
   )
 }

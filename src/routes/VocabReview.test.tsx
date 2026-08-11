@@ -25,6 +25,8 @@ function renderVocabReview(initialPath = '/') {
     [
       { path: '/', element: <VocabReview />, loader: () => ({ session: fakeSession }) },
       { path: '/vocab/review/:tagCode', element: <VocabReview />, loader: () => ({ session: fakeSession }) },
+      // セッション完了画面からのEnterキー遷移先(タグ絞り込み時は/weak-points)確認用のスタブ
+      { path: '/weak-points', element: <div>弱点分析ダッシュボード画面</div> },
     ],
     { initialEntries: [initialPath] },
   )
@@ -133,10 +135,44 @@ describe('VocabReview', () => {
     )
   })
 
-  it('shows the keyboard-shortcut hint', async () => {
+  it('shows a state-appropriate keyboard-shortcut hint (Enter to reveal, then 1-4 to rate)', async () => {
     vi.mocked(getDueVocabCards).mockResolvedValue([sampleCard])
     renderVocabReview()
-    expect(await screen.findByText('1〜4: 評価（答えを見た後）')).toBeInTheDocument()
+
+    expect(await screen.findByText('Enter: 答えを見る')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '答えを見る' }))
+    expect(await screen.findByText('1〜4: 評価')).toBeInTheDocument()
+  })
+
+  it('changes the keyboard-shortcut hint while asking the tutor a question (26章)', async () => {
+    vi.mocked(getDueVocabCards).mockResolvedValue([sampleCard])
+    renderVocabReview()
+
+    fireEvent.click(await screen.findByRole('button', { name: '答えを見る' }))
+    expect(await screen.findByText('1〜4: 評価')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /もっと詳しく聞く/ }))
+    const textarea = screen.getByPlaceholderText(/この問題について質問する/)
+    fireEvent.focus(textarea)
+
+    expect(screen.getByText('Enter: 質問を送信 / Shift+Enter: 改行')).toBeInTheDocument()
+    expect(screen.queryByText('1〜4: 評価')).not.toBeInTheDocument()
+
+    fireEvent.blur(textarea)
+    expect(await screen.findByText('1〜4: 評価')).toBeInTheDocument()
+  })
+
+  it('reveals the answer via Enter (25章: keyboard-only flow to the first card)', async () => {
+    vi.mocked(getDueVocabCards).mockResolvedValue([sampleCard])
+    renderVocabReview()
+
+    expect(await screen.findByText('negotiate')).toBeInTheDocument()
+    expect(screen.queryByText('交渉する')).not.toBeInTheDocument()
+
+    fireEvent.keyDown(window, { key: 'Enter' })
+
+    expect(await screen.findByText('交渉する')).toBeInTheDocument()
   })
 
   it('rates the card via the 1-4 keys once revealed (e.g. "3" -> good)', async () => {
@@ -179,6 +215,35 @@ describe('VocabReview', () => {
     expect(submitVocabReview).not.toHaveBeenCalled()
     // 答えを見る前なので画面は変わっていない
     expect(screen.queryByText('交渉する')).not.toBeInTheDocument()
+  })
+
+  it('navigates back via Enter on the session-complete screen (25章: keyboard-only flow to the end)', async () => {
+    vi.mocked(getDueVocabCards).mockResolvedValue([sampleCard])
+    vi.mocked(getVocabTagByCode).mockResolvedValue({ id: 1, name: 'ビジネス' })
+    vi.mocked(submitVocabReview).mockResolvedValue({
+      state: 'learning',
+      dueAt: new Date().toISOString(),
+      stability: 1,
+      difficulty: 5,
+      elapsedDays: 0,
+      scheduledDays: 1,
+      reps: 1,
+      lapses: 0,
+      lastReviewAt: new Date().toISOString(),
+    })
+
+    renderVocabReview('/vocab/review/business')
+    expect(await screen.findByText('negotiate')).toBeInTheDocument()
+    fireEvent.keyDown(window, { key: 'Enter' }) // 答えを見る
+    expect(await screen.findByText('交渉する')).toBeInTheDocument()
+    fireEvent.keyDown(window, { key: '3' }) // 評価(good) -> 自動で次へ(セッション完了)
+    await waitFor(() => expect(submitVocabReview).toHaveBeenCalledTimes(1))
+
+    expect(await screen.findByText('セッション完了')).toBeInTheDocument()
+    expect(screen.getByText('Enter: 弱点分析ダッシュボードに戻る')).toBeInTheDocument()
+
+    fireEvent.keyDown(window, { key: 'Enter' })
+    expect(await screen.findByText('弱点分析ダッシュボード画面')).toBeInTheDocument()
   })
 
   it('ignores the 1-4 keys while a rating mutation is still pending', async () => {
