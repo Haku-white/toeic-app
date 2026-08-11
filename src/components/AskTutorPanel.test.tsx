@@ -123,6 +123,25 @@ describe('AskTutorPanel', () => {
       }
     })
 
+    it('lets Ctrl+Enter (and Cmd+Enter) through to the parent window listener without submitting (26章: 次の問題への進行を優先)', () => {
+      const parentListener = vi.fn()
+      window.addEventListener('keydown', parentListener)
+      try {
+        renderPanel()
+        fireEvent.click(screen.getByRole('button', { name: /もっと詳しく聞く/ }))
+        const textarea = screen.getByPlaceholderText(/この問題について質問する/)
+        fireEvent.change(textarea, { target: { value: '質問文' } })
+
+        fireEvent.keyDown(textarea, { key: 'Enter', ctrlKey: true })
+        fireEvent.keyDown(textarea, { key: 'Enter', metaKey: true })
+
+        expect(askTutor).not.toHaveBeenCalled()
+        expect(parentListener).toHaveBeenCalledTimes(2)
+      } finally {
+        window.removeEventListener('keydown', parentListener)
+      }
+    })
+
     it('does not let a keydown on the closed "もっと詳しく聞く" button propagate to a parent window listener', () => {
       const parentListener = vi.fn()
       window.addEventListener('keydown', parentListener)

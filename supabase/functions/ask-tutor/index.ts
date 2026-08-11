@@ -4,7 +4,7 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
-const MAX_DAILY_REQUESTS = 30
+const MAX_DAILY_REQUESTS = 10
 const MAX_QUESTION_LENGTH = 500
 const GEMINI_MODEL = Deno.env.get('GEMINI_MODEL') ?? 'gemini-3.6-flash'
 

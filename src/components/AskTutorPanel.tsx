@@ -68,11 +68,24 @@ export default function AskTutorPanel({
   // window全体で拾っている「1〜4で選択」「Enterで次へ」ショートカットへ伝播させない
   // （質問文に数字やEnterを含めても誤って回答選択・次へ進む・カード評価が起きないように、
   // このコンポーネントのルート要素のonKeyDownでstopPropagationする——25章参照）。
+  // ただしCtrl+Enter(Mac互換でCmd+Enterも)だけは例外とし、質問を開いたまま
+  // 親の「Enterで次へ」に委ねられるようにする（26章）。
   function handleTextareaKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault()
+      return
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       submitQuestion()
     }
+  }
+
+  // Ctrl+Enter/Cmd+Enterのみ、ルート要素のstopPropagationを素通りさせる
+  // （パネルを開いたまま次の問題に進めるための例外——26章）。
+  function handleRootKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) return
+    e.stopPropagation()
   }
 
   if (!isOpen) {
@@ -90,7 +103,7 @@ export default function AskTutorPanel({
   }
 
   return (
-    <div className="space-y-2" onKeyDown={(e) => e.stopPropagation()}>
+    <div className="space-y-2" onKeyDown={handleRootKeyDown}>
       <div className="flex flex-wrap gap-1.5">
         {snippets.map((snippet) => (
           <button
@@ -112,7 +125,7 @@ export default function AskTutorPanel({
           onKeyDown={handleTextareaKeyDown}
           onFocus={() => onFocusChange?.(true)}
           onBlur={() => onFocusChange?.(false)}
-          placeholder="この問題について質問する...（Enterで送信 / Shift+Enterで改行）"
+          placeholder="この問題について質問する...（Enterで送信 / Shift+Enterで改行 / Ctrl+Enterで次へ）"
           rows={2}
           disabled={mutation.isPending}
           className="w-full rounded border border-neutral-300 px-3 py-2 text-sm focus:border-accent-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500 disabled:opacity-50"

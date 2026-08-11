@@ -210,7 +210,7 @@ export default function GrammarDrill() {
       </div>
 
       <p className="font-mono text-xs text-neutral-400">
-        {isAskingTutor ? 'Enter: 質問を送信 / Shift+Enter: 改行' : '1〜4: 選択 / Enter: 次へ'}
+        {isAskingTutor ? 'Enter: 質問を送信 / Shift+Enter: 改行 / Ctrl+Enter: 次へ' : '1〜4: 選択 / Enter: 次へ'}
       </p>
     </div>
   )

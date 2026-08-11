@@ -16,6 +16,7 @@ vi.mock('../lib/queries/tutor', () => ({
 }))
 
 const { getGrammarDrillData, submitGrammarAttempt } = await import('../lib/queries/grammar')
+const { askTutor } = await import('../lib/queries/tutor')
 
 const fakeSession = { user: { id: 'user-1', email: 'test@example.com' } } as unknown as Session
 
@@ -67,6 +68,7 @@ const drillData: GrammarDrillData = {
 beforeEach(() => {
   vi.mocked(getGrammarDrillData).mockReset()
   vi.mocked(submitGrammarAttempt).mockReset().mockResolvedValue(undefined)
+  vi.mocked(askTutor).mockReset()
   // Zustandストアはモジュール単位のシングルトンでテスト間を跨いで残るため明示的にリセットする
   useGrammarSessionStore.getState().resetSession()
 })
@@ -148,11 +150,26 @@ describe('GrammarDrill', () => {
     const textarea = screen.getByPlaceholderText(/この問題について質問する/)
     fireEvent.focus(textarea)
 
-    expect(screen.getByText('Enter: 質問を送信 / Shift+Enter: 改行')).toBeInTheDocument()
+    expect(screen.getByText('Enter: 質問を送信 / Shift+Enter: 改行 / Ctrl+Enter: 次へ')).toBeInTheDocument()
     expect(screen.queryByText('1〜4: 選択 / Enter: 次へ')).not.toBeInTheDocument()
 
     fireEvent.blur(textarea)
     expect(await screen.findByText('1〜4: 選択 / Enter: 次へ')).toBeInTheDocument()
+  })
+
+  it('advances to the next question via Ctrl+Enter while the tutor textarea is focused (26章)', async () => {
+    vi.mocked(getGrammarDrillData).mockResolvedValue(drillData)
+    renderGrammarDrill()
+
+    fireEvent.click(await screen.findByRole('button', { name: /will have submitted/ }))
+    fireEvent.click(screen.getByRole('button', { name: /もっと詳しく聞く/ }))
+    const textarea = screen.getByPlaceholderText(/この問題について質問する/)
+    fireEvent.change(textarea, { target: { value: 'なぜ現在完了ではダメですか?' } })
+
+    fireEvent.keyDown(textarea, { key: 'Enter', ctrlKey: true })
+
+    expect(await screen.findByText('She ___ here since 2020.')).toBeInTheDocument()
+    expect(askTutor).not.toHaveBeenCalled()
   })
 
   it('selects a choice via the 1-4 keys and highlights it', async () => {
