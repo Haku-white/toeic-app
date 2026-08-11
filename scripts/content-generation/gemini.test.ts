@@ -23,7 +23,7 @@ vi.mock('./env', () => ({
   })),
 }))
 
-const { generateJson } = await import('./gemini')
+const { generateJson, generateJsonArray, extractCompleteArrayItems } = await import('./gemini')
 
 beforeEach(() => {
   generateContentMock.mockReset()
@@ -116,5 +116,90 @@ describe('generateJson (17章: リトライ戦略)', () => {
 
     // 初回呼び出し + MAX_RETRIES(5)回のリトライ = 6回
     expect(generateContentMock).toHaveBeenCalledTimes(6)
+  })
+})
+
+describe('generateJsonArray (10.6: バッチ配列の切り詰め検知・部分救済)', () => {
+  it('returns a clean array with truncated/parseRecovered both false on a normal response', async () => {
+    generateContentMock.mockResolvedValue({
+      text: '[{"foo":1},{"foo":2}]',
+      candidates: [{ finishReason: 'STOP' }],
+    })
+
+    const result = await generateJsonArray({ prompt: 'p', schema: {} })
+
+    expect(result).toEqual({ items: [{ foo: 1 }, { foo: 2 }], truncated: false, parseRecovered: false })
+  })
+
+  it('flags truncated=true when finishReason is MAX_TOKENS even if the JSON still parsed cleanly', async () => {
+    generateContentMock.mockResolvedValue({
+      text: '[{"foo":1}]',
+      candidates: [{ finishReason: 'MAX_TOKENS' }],
+    })
+
+    const result = await generateJsonArray({ prompt: 'p', schema: {} })
+
+    expect(result).toEqual({ items: [{ foo: 1 }], truncated: true, parseRecovered: false })
+  })
+
+  it('recovers complete leading items and drops the incomplete trailing item when JSON.parse fails', async () => {
+    // 3件目が出力トークン上限で途中で切れているケースを模す
+    generateContentMock.mockResolvedValue({
+      text: '[{"word":"a"},{"word":"b"},{"word":"c","meaning_ja":"切',
+      candidates: [{ finishReason: 'MAX_TOKENS' }],
+    })
+
+    const result = await generateJsonArray({ prompt: 'p', schema: {} })
+
+    expect(result).toEqual({
+      items: [{ word: 'a' }, { word: 'b' }],
+      truncated: true,
+      parseRecovered: true,
+    })
+  })
+
+  it('still retries on a retryable status (503) before succeeding, same as generateJson', async () => {
+    generateContentMock
+      .mockRejectedValueOnce(new ApiError({ message: 'overloaded', status: 503 }))
+      .mockResolvedValueOnce({ text: '[{"foo":1}]', candidates: [{ finishReason: 'STOP' }] })
+
+    const promise = generateJsonArray({ prompt: 'p', schema: {} })
+    await vi.runAllTimersAsync()
+    const result = await promise
+
+    expect(result).toEqual({ items: [{ foo: 1 }], truncated: false, parseRecovered: false })
+    expect(generateContentMock).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('extractCompleteArrayItems (10.6)', () => {
+  it('extracts all items from a well-formed array', () => {
+    const items = extractCompleteArrayItems('[{"a":1},{"a":2},{"a":3}]')
+    expect(items).toEqual([{ a: 1 }, { a: 2 }, { a: 3 }])
+  })
+
+  it('drops only the incomplete trailing item when the text is cut off mid-object', () => {
+    const items = extractCompleteArrayItems('[{"a":1},{"a":2},{"a":3,"b":"unterm')
+    expect(items).toEqual([{ a: 1 }, { a: 2 }])
+  })
+
+  it('correctly tracks nested arrays within an item (e.g. a "choices" field) without miscounting depth', () => {
+    const items = extractCompleteArrayItems(
+      '[{"choices":["a","b","c","d"],"correct_index":1},{"choices":["e","f"]',
+    )
+    expect(items).toEqual([{ choices: ['a', 'b', 'c', 'd'], correct_index: 1 }])
+  })
+
+  it('ignores brackets that appear inside string values', () => {
+    const items = extractCompleteArrayItems('[{"text":"a [bracket] and {brace} inside a string"},{"text":"b"}]')
+    expect(items).toEqual([{ text: 'a [bracket] and {brace} inside a string' }, { text: 'b' }])
+  })
+
+  it('returns an empty array when there is no "[" in the text', () => {
+    expect(extractCompleteArrayItems('not json at all')).toEqual([])
+  })
+
+  it('returns an empty array when even the first item is incomplete', () => {
+    expect(extractCompleteArrayItems('[{"a":1,"b":"cut off')).toEqual([])
   })
 })

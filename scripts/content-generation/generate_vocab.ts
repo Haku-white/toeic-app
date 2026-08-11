@@ -1,5 +1,5 @@
 import { parseArgs } from './cliArgs'
-import { generateJson } from './gemini'
+import { generateJsonArray } from './gemini'
 import { generateVocabBatch, type GenerateVocabBatchParams } from './generateVocab'
 import { createSupabaseAdminClient } from './supabaseAdmin'
 
@@ -29,7 +29,7 @@ async function main() {
       promptVersion: args['prompt-version'],
       modelName: args.model,
     },
-    { supabase: createSupabaseAdminClient(), generateJson },
+    { supabase: createSupabaseAdminClient(), generateJsonArray },
   )
 
   console.log(`生成完了: batch_id=${result.batchId}, ${result.itemCount}件を generation_batch_items に保存しました。`)

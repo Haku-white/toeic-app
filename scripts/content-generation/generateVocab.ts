@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildIdiomPrompt, buildVocabPrompt, VOCAB_JSON_SCHEMA } from './promptTemplates'
-import type { generateJson as generateJsonFn } from './gemini'
+import type { generateJsonArray as generateJsonArrayFn } from './gemini'
 import { loadEnv } from './env'
 
 /** 13.1: イディオムは常にこのタグに紐づく（`vocab_tags`への事前seedは不要、8.6のupsertで自動作成される） */
@@ -19,12 +19,14 @@ export interface GenerateVocabBatchParams {
 
 export interface GenerateVocabBatchDeps {
   supabase: SupabaseClient
-  generateJson: typeof generateJsonFn
+  generateJsonArray: typeof generateJsonArrayFn
 }
 
 export interface GenerateVocabBatchResult {
   batchId: string
   itemCount: number
+  /** 10.6: Gemini出力が最大トークン数で切り詰められた可能性がある場合true */
+  truncated: boolean
 }
 
 const EXISTING_SAMPLES_LIMIT = 30
@@ -60,7 +62,7 @@ export async function generateVocabBatch(
   params: GenerateVocabBatchParams,
   deps: GenerateVocabBatchDeps,
 ): Promise<GenerateVocabBatchResult> {
-  const { supabase, generateJson } = deps
+  const { supabase, generateJsonArray } = deps
   const contentKind = params.contentKind ?? 'vocab'
   // CLIの--model指定 > .envのGEMINI_MODEL > env.tsのデフォルト、の優先順位で解決する
   // （以前は'gemini-2.5-flash'をここに直書きしており、.envのGEMINI_MODELが無視されていた）。
@@ -98,7 +100,11 @@ export async function generateVocabBatch(
           existingWords,
         })
 
-  const items = await generateJson<unknown[]>({ prompt, schema: VOCAB_JSON_SCHEMA, model: modelName })
+  const { items, truncated, parseRecovered } = await generateJsonArray<unknown>({
+    prompt,
+    schema: VOCAB_JSON_SCHEMA,
+    model: modelName,
+  })
 
   if (items.length > 0) {
     const { error: itemsError } = await supabase.from('generation_batch_items').insert(
@@ -111,11 +117,17 @@ export async function generateVocabBatch(
     if (itemsError) throw itemsError
   }
 
+  // 10.6: 切り詰め・パース救済が起きた場合はnotesに残す（原因追跡用、20260812の教訓と同じ思想）。
+  const notes =
+    truncated || parseRecovered
+      ? `Gemini出力が最大トークン数で切り詰められた可能性があります（依頼${params.count}件中${items.length}件のみ生成・保存）。`
+      : null
+
   const { error: updateError } = await supabase
     .from('generation_batches')
-    .update({ generated_count: items.length, status: 'validating' })
+    .update({ generated_count: items.length, status: 'validating', notes })
     .eq('id', batchId)
   if (updateError) throw updateError
 
-  return { batchId, itemCount: items.length }
+  return { batchId, itemCount: items.length, truncated: truncated || parseRecovered }
 }

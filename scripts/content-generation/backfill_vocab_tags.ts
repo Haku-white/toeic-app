@@ -1,5 +1,5 @@
 import { parseArgs } from './cliArgs'
-import { generateJson } from './gemini'
+import { generateJson, generateJsonArray } from './gemini'
 import { generateVocabBatch } from './generateVocab'
 import { validateBatch } from './validateBatch'
 import { commitBatch } from './commitBatch'
@@ -66,7 +66,7 @@ async function main() {
 
       const generated = await generateVocabBatch(
         { tagName: run.tagName, count: run.count, targetBand: TARGET_BAND },
-        { supabase, generateJson },
+        { supabase, generateJsonArray },
       )
       console.log(`生成完了: batch_id=${generated.batchId}, ${generated.itemCount}件`)
 

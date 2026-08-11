@@ -21,7 +21,8 @@
     "content:generate-vocab": "tsx scripts/content-generation/generate_vocab.ts",
     "content:validate": "tsx scripts/content-generation/validate_batch.ts",
     "content:review": "tsx scripts/content-generation/review_batch.ts",
-    "content:commit": "tsx scripts/content-generation/commit_batch.ts"
+    "content:commit": "tsx scripts/content-generation/commit_batch.ts",
+    "backfill:auto": "tsx scripts/content-generation/auto_backfill.ts"
   },
   "keywords": [],
   "author": "",

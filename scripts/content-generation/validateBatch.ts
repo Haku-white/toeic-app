@@ -30,6 +30,47 @@ interface BatchItemRow {
   status: string
 }
 
+/**
+ * 10.9: DB全体との近似重複検出（8.4②）とは別に、同一バッチ内で生成された項目同士の
+ * 重複を検出する。正規化(trim・小文字化)後のquestion_textが一致する場合、後発の項目を
+ * 対象とする（先発は通常どおり構造チェック以降に進む）。メッセージには先発項目の
+ * question_textを含め、どの項目と重複したかを名指しする（10.10のトレーサビリティ方針）。
+ */
+function findInBatchGrammarDuplicates(items: BatchItemRow[]): Map<string, string> {
+  const seen = new Map<string, string>()
+  const duplicates = new Map<string, string>()
+  for (const item of items) {
+    const raw = item.raw_payload as { question_text?: unknown }
+    if (typeof raw?.question_text !== 'string') continue // 構造チェックで別途弾かれる
+    const key = raw.question_text.trim().toLowerCase()
+    const firstQuestionText = seen.get(key)
+    if (firstQuestionText !== undefined) {
+      duplicates.set(item.id, `同一バッチ内の他の項目（"${firstQuestionText}"）と質問文が重複しています`)
+    } else {
+      seen.set(key, raw.question_text)
+    }
+  }
+  return duplicates
+}
+
+/** 10.9: 語彙版。既存のwordPosKey(word, part_of_speech)をそのまま流用する。 */
+function findInBatchVocabDuplicates(items: BatchItemRow[]): Map<string, string> {
+  const seen = new Map<string, string>()
+  const duplicates = new Map<string, string>()
+  for (const item of items) {
+    const raw = item.raw_payload as { word?: unknown; part_of_speech?: unknown }
+    if (typeof raw?.word !== 'string') continue // 構造チェックで別途弾かれる
+    const key = wordPosKey(raw.word, typeof raw.part_of_speech === 'string' ? raw.part_of_speech : null)
+    const firstWord = seen.get(key)
+    if (firstWord !== undefined) {
+      duplicates.set(item.id, `同一バッチ内の他の項目（"${firstWord}"）とword+part_of_speechが重複しています`)
+    } else {
+      seen.set(key, raw.word)
+    }
+  }
+  return duplicates
+}
+
 async function markItem(
   supabase: SupabaseClient,
   itemId: string,
@@ -96,11 +137,23 @@ export async function validateBatch(batchId: string, deps: ValidateBatchDeps): P
 
   const existingVocabPairs = contentType === 'vocab' ? await loadExistingVocabWordPosPairs(supabase) : null
 
+  // 10.9: バッチ内自己重複チェック。構造チェックより前に判定し、重複と判定された項目は
+  // 以降のDB近似重複検出・セルフチェック（Gemini呼び出し）を無駄に行わないようスキップする。
+  const inBatchDuplicates =
+    contentType === 'grammar' ? findInBatchGrammarDuplicates(items) : findInBatchVocabDuplicates(items)
+
   let autoPassed = 0
   let needsReview = 0
 
   for (const item of items) {
     try {
+      const duplicateMessage = inBatchDuplicates.get(item.id)
+      if (duplicateMessage) {
+        await markItem(supabase, item.id, { status: 'needs_review', validation_errors: [duplicateMessage] })
+        needsReview += 1
+        continue
+      }
+
       if (contentType === 'grammar') {
         const structural = validateGrammarItemStructure(item.raw_payload)
         if (!structural.valid) {
@@ -167,10 +220,15 @@ export async function validateBatch(batchId: string, deps: ValidateBatchDeps): P
       // commitBatch.tsの「1件の失敗はneeds_reviewに差し戻し、バッチ全体は継続する」という
       // 既存方針とここで揃える（実データで、セルフチェックがsolved_indexの範囲外の値を
       // 返しZodErrorで検証全体がクラッシュした事例があったため追加した）。
+      // エラーメッセージはError.messageを優先して抽出する。素の`String(error)`は
+      // PostgrestErrorのようなプレーンオブジェクトに対して"[object Object]"になり、
+      // 原因調査にSQLで実データを確認し直す必要が生じる（commitBatch.tsが20260812発見の
+      // 実例を受けて既に採用しているパターンに揃える、10.10参照）。
+      const errorMessage = error instanceof Error ? error.message : JSON.stringify(error)
       console.error(`item ${item.id} の検証中に予期しないエラーが発生しました:`, error)
       await markItem(supabase, item.id, {
         status: 'needs_review',
-        validation_errors: [`検証中に予期しないエラーが発生しました: ${String(error)}`],
+        validation_errors: [`検証中に予期しないエラーが発生しました: ${errorMessage}`],
       })
       needsReview += 1
     }

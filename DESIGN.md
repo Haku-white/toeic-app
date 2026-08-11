@@ -29,6 +29,17 @@
   - **利用回数上限の変更**: `supabase/functions/ask-tutor/index.ts`の`MAX_DAILY_REQUESTS`を`30`から`10`に変更。**クラウドへの再デプロイ（`supabase functions deploy ask-tutor`）は未実施**——外部APIキーが絡む操作としてCLAUDE.mdの確認事項に該当するため、コード変更のみ行いユーザーの許可待ちとした。ローカルの`supabase functions serve`を使う場合は次回起動時から反映される。
   - **Ctrl+Enter(Mac互換でCmd+Enterも)で次の問題へ**: `AskTutorPanel`の`handleTextareaKeyDown`と、ルート要素の`onKeyDown`（`handleRootKeyDown`に切り出し）の両方で、`Enter`かつ`ctrlKey`/`metaKey`のときだけ質問送信・stopPropagationの対象から除外し、親画面のグローバルkeydownハンドラ（GrammarDrill/MixedDrillの「Enterで次へ」）まで素通りさせるようにした。textarea側は`preventDefault()`のみ行い（改行が入らないようにする）送信はしない。GrammarDrill/MixedDrillの質問入力中ヒントに「Ctrl+Enter: 次へ」を追加し、テキストエリアのplaceholderにも明記した。VocabReviewは回答後の「次へ」がEnterキーではなく1〜4キーでの評価に紐づく設計（25章）のため、この変更の対象外とした。
   - テスト: `npm test`（207件全て成功、204件から+3件——AskTutorPanelに1件、GrammarDrill/MixedDrillに各1件追加の計3件）・`npm run lint`（0件）・`npm run typecheck`（0件）。`ask-tutor`はDeno Edge Function（Vitest対象外）のため定数変更のみで自動テストは無し。
+- 2026-08-11: 自動問題生成（在庫閾値ベースの自動補充、10章）を実装。設計は実装前にDESIGN.md 10章として追記済み（本エントリは実装完了の記録）。
+  - **実装前提の訂正が2点あった**: (1) 依頼は「Gemini呼び出しの503対策としてバッチ化する」という前提だったが、`GRAMMAR_JSON_SCHEMA`/`VOCAB_JSON_SCHEMA`・`generateGrammarBatch`/`generateVocabBatch`は元から1回の呼び出しで複数件（既存の一回限りバックフィルは文法15〜20件・語彙20件）を配列で生成する設計だった。今回のバッチ化対応は新規スキーマ変更ではなく、新設オーケストレーターが不足数を既定8件のサブバッチに分割して要求する形に絞った（10.1参照）。(2) 依頼にあった「2026-08-12にラベルバグでバッチ全体10件がneeds_reviewに巻き込まれた事例」はコード上・DESIGN.md上に見つけられなかった。実際に見つかった実例は日付・内容とも異なる2件（`commitBatch.ts`のコメント参照）: 20260810のcategory_code大文字化/略称（`comparison`→`COMP`）事例と、2026-08-12の`commitBatch.ts`エラーメッセージが`[object Object]`になっていた事例。ユーザーの記憶と実際の記録の食い違いをそのまま報告する（10.10参照）。
+  - **在庫チェック**（`inventoryCheck.ts`、新規）: `checkGrammarInventory`/`checkVocabInventory`。文法は9カテゴリごとの`grammar_questions`件数、語彙は`vocab_tags`（イディオム含む）ごとの`vocab_word_tags`件数を集計し、閾値（既定30件、目標40件——既存の一回限りバックフィルスクリプトの「各カテゴリ/タグ合計40問・既存語と合わせて30〜50問目安」を踏襲）未満のみ返す。codeが`vocabTagCodes.ts`の`VOCAB_TAG_CODES`に無いタグはスキップして警告ログを出す。
+  - **バッチ出力のパース耐性強化**（`gemini.ts`拡張）: 新規`generateJsonArray()`を追加（既存`generateJson()`はシグネチャ・挙動とも変更なし、共通のリトライ・バックオフ部分を`callGeminiWithRetry`として抽出しただけ）。レスポンスの`candidates[0].finishReason`が`MAX_TOKENS`のとき`truncated: true`を返す（`@google/genai`の型定義上のフィールドをそのまま使い、文字列ヒューリスティックは使わない）。`JSON.parse`が失敗した場合は新規`extractCompleteArrayItems()`（深さ・文字列エスケープを追跡する軽量スキャナ、外部ライブラリ不使用）でトップレベル配列要素のうち完結しているものだけを部分救済し、末尾の不完全な要素のみ破棄する。`generateGrammarBatch`/`generateVocabBatch`はこの結果を使うよう切り替え（`GenerateGrammarBatchDeps`/`GenerateVocabBatchDeps`の`generateJson`フィールドを`generateJsonArray`に変更——呼び出し元7箇所（`backfill_grammar_categories.ts`/`backfill_vocab_tags.ts`/`backfill_idiom.ts`/`generate_grammar.ts`/`generate_vocab.ts`/テスト2ファイル）を追随修正）。切り詰め・部分救済が起きた場合は`generation_batches.notes`に件数を明記し、戻り値に`truncated`を追加。不完全な断片はneeds_reviewに保存しない（`raw_payload`は`jsonb not null`で保存先が無いため）——不足分は10.4のオーケストレーターが後続のサブバッチ生成でそのまま埋め合わせる設計とした。
+  - **バッチ内自己重複チェック**（`validateBatch.ts`拡張）: DB全体との近似重複検出（既存）とは別に、同一バッチ内で生成された項目同士の重複を検出する`findInBatchGrammarDuplicates`/`findInBatchVocabDuplicates`を追加。文法は正規化後の`question_text`一致、語彙は既存の`wordPosKey`一致で判定し、後発の項目のみ`needs_review`にする（構造チェックより前に判定し、無駄なDB問い合わせ・Gemini呼び出しをスキップ）。あわせて`validateBatch.ts`の予期しないエラーのcatch節が素の`String(error)`を使っており`[object Object]`になりうる欠陥を発見・修正した（`commitBatch.ts`が既に採用している`error.message`優先抽出パターンに統一）。
+  - **同時実行数制限とスロットリング**（`concurrencyPool.ts`、新規）: `createThrottledPool({concurrency, minIntervalMs})`。外部ライブラリ（p-limit等）は追加せず自前実装。既定値は同時実行数2・最小ディスパッチ間隔1500ms（根拠は10.8参照——既存の一回限りバックフィルは完全直列運用だったため、そこからの引き上げ幅を小さく抑えた）。
+  - **段階的なバッチサイズ縮小**（`autoBackfill.ts`内`generateWithShrinkRetry`）: `gemini.ts`の5回リトライを使い切った末の429/5xx系エラー（`isRetryableError`を`gemini.ts`から公開エクスポートして再利用）のときのみ、バッチサイズを半分ずつ最大3段階（既定8→4→2）縮小して再試行する。それ以外の致命的エラーは即座に上位へ伝播させ実行全体を中断する（既存の一回限りバックフィルスクリプトと同じ方針）。縮小しても失敗した分は「今回諦めた件数」として結果に記録し、次回実行時（閾値未満のままなので）自動的に再検出される。
+  - **オーケストレーション**（`autoBackfill.ts`、新規）: `runAutoBackfill(deps, options)`。在庫チェック結果から不足分の生成タスク（文法は既存15:15:10比率を踏襲し3:4:5の難易度に按分、語彙はタグ単位）を組み立て、`concurrencyPool`を通して「生成→検証→(auto_passedのみ)コミット」まで実行する。**既存の一回限りバックフィルスクリプトと異なり、needs_reviewが発生してもそのタスク・他のカテゴリ/タグの処理は中断しない**（`commitBatch`は`auto_passed`/`approved`のみを対象にする実装のため、needs_reviewが混在していても合格分だけ安全にコミットできることを利用した設計判断、10.4参照）。1回あたりの生成上限（既定100件、根拠は10.12参照）に達した時点で残りは「今回未着手」として記録し打ち切る。
+  - **CLI**（`auto_backfill.ts`、新規）: `npm run backfill:auto -- [--dry-run] [--max-total] [--batch-size] [--concurrency] [--throttle-ms] [--grammar-threshold/target] [--vocab-threshold/target] [--model]`。在庫チェック結果・実行結果（タスクごとの生成/検証/コミット件数、needs_reviewが出たタスクのレビューコマンド、諦めた件数、上限超過でスキップしたラベル）を明示的に出力する（10.10のトレーサビリティ方針）。cron等の定期実行は今回スコープ外とし11章の未決事項に記録した。needs_reviewのエスカレート運用は既存方針（エージェントが一次判断、本当に曖昧なものだけユーザーへ）をそのまま踏襲し、新しい仕組みは実装していない。
+  - **DESIGN.mdの実装追いつき状況**: 8章（Gemini APIパイプライン）が実装（13章のイディオム・16章のvocab_tags code分離・17章のリトライ戦略・19章のセルフチェック改訂を含む）から大きく取り残されていることを発見。今回のタスク範囲を超えるため全面書き直しはスコープ外とし、11章の未決事項に記録した（詳細は10章冒頭参照）。
+  - テスト: `npm test`（246件全て成功、207件から+39件——`gemini.test.ts`に10件、`generateGrammar.test.ts`に1件、`generateVocab.test.ts`に1件、`validateBatch.test.ts`に3件、新規`inventoryCheck.test.ts`に5件、新規`concurrencyPool.test.ts`に4件、新規`autoBackfill.test.ts`に15件）・`npm run lint`（0件）・`npm run typecheck`（0件）・`npm run typecheck:scripts`（0件）。
 
 ---
 
@@ -738,12 +749,108 @@ limit 5;
 
 ---
 
-## 10. 未決事項 / 次のステップ
+## 10. 自動問題生成（在庫閾値ベースの自動補充）【設計案】
+
+既存の8章パイプライン（生成→検証→レビュー→コミット）と、それを一括実行する`backfill_grammar_categories.ts`/`backfill_vocab_tags.ts`/`backfill_idiom.ts`（いずれも固定件数を一回だけ流す実行用スクリプト）の上に、「在庫が閾値を下回ったカテゴリ/タグを自動検出し、自動的に生成バッチを流し込む」CLIツールを追加する。
+
+**前提として発見した既存実装とのズレ**: 本章の設計に着手する前提として実装（`schemas.ts`/`promptTemplates.ts`/`generateGrammar.ts`/`generateVocab.ts`）を精読したところ、DESIGN.md自体が実装から取り残されていることが分かった。具体的には、コード中のコメントが指す「13章（イディオム）」「16章（vocab_tags code分離）」「17章（リトライ戦略）」「19章（セルフチェック改訂）」はいずれも本ファイルには存在しない（本ファイルは§1〜§10のみで、それらの内容はコードコメントの中にしか残っていない）。また§8.2/8.3/8.4のSQL・JSON Schemaのスニペット自体も実装と食い違っている（例: §8.3の語彙JSON Schemaに`etymology_note`が無い、§8.4のセルフチェックJSON Schemaに`reasoning`が無い）。これは本タスクの範囲を大きく超える別件のドキュメント整備が必要な状態のため、**今回は全面的な追いつき作業はスコープ外とし、本章の追加と、直下の「未決事項」の該当項目の解消マークのみに留める**（ユーザーに別途報告する）。
+
+### 10.1 「バッチ化」に関する前提の訂正
+
+依頼文では「現状1件ずつ生成している」という前提だったが、実装を確認したところ**既にバッチ化されている**——`GRAMMAR_JSON_SCHEMA`/`VOCAB_JSON_SCHEMA`は元から`type: 'ARRAY'`で、`generateGrammarBatch`/`generateVocabBatch`は1回のGemini呼び出しで`count`件（既存の一回限りスクリプトでは文法15〜20件・語彙20件）をまとめて生成し、`generation_batch_items`に1件ずつ保存している。したがって本章での「バッチ化」対応は、新規のスキーマ変更ではなく以下の2点に絞られる。
+
+1. 新設する自動補充オーケストレーター（10.4）が、不足数をそのまま1回の巨大なバッチとして要求するのではなく、**既定8件（5〜10件の目安の中央値）のサブバッチに分割**して複数回に分けて要求する（1回の出力トークン量を抑え、503・出力切れのリスクを下げるため）。
+2. 出力配列のパース処理を、切り詰め検知・部分救済に対応した`generateJsonArray()`に切り替える（10.6）。
+
+既存の`generateGrammarBatch`/`generateVocabBatch`の呼び出し口（1回のバッチ生成の粒度）自体はそのまま流用し、新規の巨大な改修は行わない。
+
+### 10.2 在庫閾値の設計
+
+- **判定単位**: 文法は`grammar_categories`の9カテゴリごとに`grammar_questions`の件数、語彙は`vocab_tags`の各タグ（イディオムを含む）ごとに`vocab_word_tags`経由の紐付け件数。
+- **閾値の初期値**: 低水位閾値`30`件・目標補充後件数`40`件。根拠は既存の一回限りバックフィルスクリプトが採用していた目安をそのまま踏襲する——`backfill_grammar_categories.ts`は8カテゴリ×(15+15+10)=カテゴリあたり40問、`backfill_vocab_tags.ts`/`backfill_idiom.ts`は各タグ2バッチ×20語=40語、いずれもコメントで「既存語と合わせて30〜50問/語の目安」と明記されている。閾値30は「target40の下限に近い」水準として設定し、40を下回ってから即座に反応するのではなく実用上ある程度の余裕を持たせる。
+- 実装は`--grammar-threshold`/`--vocab-threshold`（低水位）と将来的な目標値の両方をCLI引数で上書き可能にする（デフォルトは上記）。
+
+### 10.3 在庫チェック（`inventoryCheck.ts`、新規）
+
+- `checkGrammarInventory(supabase, threshold, target)`: `grammar_categories`を全件取得し、各`id`について`grammar_questions`を`{count:'exact', head:true}`で件数取得（`commitBatch.ts`の集計と同じSupabaseパターン）。`count < threshold`のカテゴリのみ`{categoryCode, categoryId, nameJa, count, shortfall: target - count}`として返す。
+- `checkVocabInventory(supabase, threshold, target)`: `vocab_tags`を全件取得し、各`id`について`vocab_word_tags`を同様に件数取得。閾値未満のタグのみ返す（`code`が`VOCAB_TAG_CODES`に無い＝未知のタグは対象外としてスキップし警告ログを出す——`resolveTagId`が要求する事前登録済みcodeとの整合性を保つため）。
+- 両関数とも副作用なし（読み取りのみ）。オーケストレーター側で結果を見てから生成を開始するかどうかを判断できるよう、`--dry-run`フラグでこのチェック結果だけを表示して終了できるようにする。
+
+### 10.4 オーケストレーション（`autoBackfill.ts`、新規）
+
+`checkGrammarInventory`/`checkVocabInventory`の結果を基に、閾値未満のカテゴリ/タグそれぞれについて「不足数を埋めるための生成タスク」を組み立て、10.5〜10.8の各機構を通して実行する。
+
+- 文法の不足数は、既存の難易度3:4:5=15:15:10という比率（≒37.5%:37.5%:25%）を維持したまま不足数に按分し、8件（10.5参照）のサブバッチに分割する。
+- 語彙（イディオム含む）の不足数はタグの区別のみで難易度の概念が無いため、単純に8件区切りでサブバッチ分割する。
+- 各サブバッチは「生成→検証→(auto_passedのみ)コミット」まで自動で行う。**既存の一回限りバックフィルスクリプトと異なり、needs_reviewが発生してもそのタスクの残り・他のカテゴリ/タグの処理は中断しない**（10.9のエスカレーション方針参照）。理由: 本ツールは日常的な自動補充を想定しており、1件の曖昧な問題のために実行全体を止めるのは運用上望ましくないため。`commitBatch`は`auto_passed`/`approved`のアイテムのみを対象にする実装のため、needs_reviewが混在していても該当バッチの中の合格分だけを安全にコミットできる。
+- 総生成件数の上限（10.10）に達した時点で、まだ処理していないカテゴリ/タグを「今回未着手」として要約に記録し、そこで打ち切る。
+
+### 10.5 バッチ化（サブバッチサイズ）
+
+不足数はデフォルト**8件**（5〜10件の中央値、ユーザー指定レンジ内）ごとのサブバッチに分割して`generateGrammarBatch`/`generateVocabBatch`を複数回呼び出す。`--batch-size`で上書き可能。10.1で述べたとおりJSON Schema自体は変更不要。
+
+### 10.6 出力パースの耐性強化（`gemini.ts`拡張）
+
+新規`generateJsonArray<T>()`を追加する（既存の`generateJson<T>()`は自己チェック等の単一オブジェクト用途にそのまま残し、後方互換を維持——挙動・シグネチャ変更なし）。
+
+- Gemini呼び出し自体のリトライ・バックオフ（429/5xx対象、既存の5回・指数バックオフ）は`callGeminiWithRetry`として共通化し、`generateJson`/`generateJsonArray`の両方から使う。
+- レスポンスの`candidates[0].finishReason`が`'MAX_TOKENS'`のとき、出力トークン上限による**途中切れ**として`truncated: true`を返す（`@google/genai`の型定義上`Candidate.finishReason`として公式に提供されているフィールドを使う——文字列のヒューリスティック判定はしない）。
+- `JSON.parse`がそのまま失敗した場合（切り詰めに限らず、フォーマット崩れ全般に対応）、即座に全滅させず`extractCompleteArrayItems()`で**トップレベル配列要素ごとに完結しているものだけを部分的に救済**する（末尾の不完全な要素だけを破棄し、それより前の完結した要素は活かす）。ブレース/ブラケットの深さと文字列エスケープを追跡する軽量なスキャナで実装し、外部ライブラリは追加しない。
+- 救済を使った場合は`parseRecovered: true`を返す。呼び出し元（`generateGrammarBatch`/`generateVocabBatch`）は`truncated || parseRecovered`のとき、`generation_batches.notes`に「依頼N件中M件のみ生成・保存」という注記を残す（人力調査時にSQLで原因を辿れるようにするため——20260812の教訓と同じ思想）。
+- **`needs_review`には振り分けない**（設計判断・理由): 不完全な断片はそもそも有効なJSONではなく、`generation_batch_items.raw_payload`は`jsonb not null`で保存先自体が無い。「切り詰められた項目」を無理にレビュー対象として保存するのではなく、不足分は10.4のオーケストレーターが後続のサブバッチ生成でそのまま再要求する（10.7の縮小リトライとも自然に合流する）。
+
+### 10.7 段階的なバッチサイズ縮小
+
+`generateJsonArray`が（gemini.ts内の5回リトライを使い切った末に）429/5xx系のエラーで失敗した場合、オーケストレーター側で以下のリトライを行う（実装する。過度に複雑化しない範囲に収まると判断したため見送らない）。
+
+- 現在のサブバッチサイズが最小件数（既定2件）より大きい場合、半分（切り上げ）に縮小して再要求する。半分に割った残りも別のサブ呼び出しとして処理する（例: 8件失敗→4件+4件で再試行）。
+- 縮小は最大3段階まで（8→4→2）。それでも失敗する場合はそのカテゴリ/タグのその回の不足分を諦め、「今回生成できなかった件数」として要約に明記する（次回実行時に自然に再検出され再試行される）。
+- 429/5xx以外の致命的エラー（カテゴリコード不正・認証エラー等、`gemini.ts`の`isRetryableError`が false と判定するもの）は縮小せず即座に上位へ伝播させ、実行全体を止める（既存の一回限りバックフィルスクリプトと同じ「予期しないエラーは中断」方針を踏襲）。
+
+### 10.8 同時実行数の制限とスロットリング（`concurrencyPool.ts`、新規）
+
+- 複数カテゴリ/タグのサブバッチを並行して処理できるよう、簡易な同時実行数制限プール（自前実装、外部ライブラリ追加なし）を新設する。
+- **同時実行数の既定値: 2**。根拠: 既存の一回限りバックフィルスクリプトは完全直列（実質concurrency=1）で運用されており429の実害は報告されていない。本ツールは並行化による時短を狙う一方、単一APIキーのQPM（分あたりリクエスト数）制限を踏みやすくなるリスクとのバランスを取り、直列からの引き上げ幅を小さく抑えた。`--concurrency`で上書き可能。
+- **最小リクエスト間隔の既定値: 1500ms**（ディスパッチ開始時刻の間隔）。根拠: 既存の直列実行ではDB往復+Gemini応答時間により呼び出し間に自然な間隔が生じていたが、concurrency>1にするとその自然な間隔が失われうるため、明示的に下限を設ける。`--throttle-ms`で上書き可能。
+
+### 10.9 バッチ内自己重複チェック（`validateBatch.ts`拡張）
+
+DB全体との近似重複検出（8.4②、既存）に加え、**同一バッチ内で生成された項目同士**の重複を検出する（従来は対象外だった経路）。
+
+- 文法: `question_text`を`trim().toLowerCase()`で正規化し、バッチ内で先に出現した項目と一致する場合、後発の項目を`needs_review`に振り分ける。メッセージには先発項目の`question_text`を含め、どちらと重複したかを明示する（10.10のトレーサビリティ方針）。
+- 語彙: 既存の`wordPosKey(word, part_of_speech)`をそのまま流用し、バッチ内で同じキーが再出現した場合に後発を`needs_review`にする。
+- 検証ループの最初（構造チェックより前）に判定し、構造チェック・近似重複検出・セルフチェックをスキップして無駄なGemini呼び出し・DB問い合わせを避ける。
+
+### 10.10 エラーの原因追跡性
+
+- `validateBatch.ts`の予期しないエラーのcatch節が`String(error)`をそのまま使っており、Supabaseの`PostgrestError`のようなプレーンオブジェクトに対して`[object Object]`になりうる欠陥を発見したため修正する（`commitBatch.ts`が20260812発見の実例を受けて既に採用している`error instanceof Error ? error.message : JSON.stringify(error)`のパターンに揃える）。
+- 上記の10.9の重複メッセージ、10.6の`notes`欄、10.7の縮小リトライの要約ログはいずれも「どのカテゴリ/タグの・どのサブバッチの・どの項目が」原因かを名指しする文面にする（件数の集計のみで終わらせない）。
+- なお、ユーザーが挙げた「2026-08-12に1つのラベルバグでバッチ全体10件がneeds_reviewに巻き込まれた事例」そのものはコード上・DESIGN.md上に見つけられなかった。実際に見つかった2件の実例（`commitBatch.ts`のコメントに記録済み）は別の日付・別の内容だった: (a) 20260810、`category_code`が`"SUBJUNCTIVE"`や`"COMP"`のように大文字化・省略されてバッチ全体（10件）がneeds_review相当になった事例（`resolveCategoryId`のcasing正規化+prefix-matchで対応済み）、(b) 2026-08-12、`commitBatch.ts`のエラーメッセージが`[object Object]`になっていた事例（`error.message`優先抽出で対応済み）。本章の10.10はこの(b)と同種の欠陥が`validateBatch.ts`にも残っていたのを見つけて併せて直したもの。ユーザーの記憶と実際の記録に食い違いがあったため、念のためここに明記する。
+
+### 10.11 実行トリガーとスコープ
+
+- 今回はCLIスクリプト（`npx tsx scripts/content-generation/auto_backfill.ts`、`npm run backfill:auto`）による手動実行のみとし、cron等の定期実行は**スコープ外**とする。将来的には`node-cron`やSupabase Edge Functionsの`pg_cron`連携等が候補になるが、無人実行時のエラー通知・Gemini APIコストの上限管理を別途設計する必要があるため、次のステップ（11章）に記録する。
+- CLI引数: `--dry-run`（在庫チェック結果のみ表示）、`--max-total`（10.12）、`--batch-size`（既定8）、`--concurrency`（既定2）、`--throttle-ms`（既定1500）、`--grammar-threshold`/`--vocab-threshold`（既定30）、`--grammar-target`/`--vocab-target`（既定40）、`--model`。
+
+### 10.12 1回あたりの生成上限件数
+
+- **既定値: 総計100件/回**。根拠: サブバッチサイズ8件なら約13回の生成呼び出し、文法問題はさらに1件ごとにセルフチェックの追加Gemini呼び出しが発生するため、最悪ケースで1回の実行あたり最大約225回（生成13回+セルフチェック最大100回+近似重複チェック等のDB呼び出し）のAPI呼び出しに収まる範囲として設定した。手動実行を前提とするツールとして、1回の実行が際限なくAPIコストを消費しないよう明示的に上限を設ける。`--max-total`で上書き可能。
+- 上限に達した時点で残りのカテゴリ/タグは「未着手」として要約に記録し、次回実行（threshold未満のままなので自動的に再検出される）に持ち越す。
+
+### 10.13 needs_reviewのエスカレート運用
+
+既存方針（`backfill_grammar_categories.ts`等のコメントに記録済み）をそのまま踏襲する: エージェント（Claude Code）がまず`review_batch.ts`相当の判断（`applyReviewDecision`）で一次判断し、文法的・語彙的に明確に誤り/正しいと判断できるものはその場で承認/却下する。**本当に曖昧なケースのみユーザーにエスカレートする**。本ツール自体は新しいエスカレート機構を実装しない（既存の`review_batch.ts`CLIをそのまま使う）。
+
+---
+
+## 11. 未決事項 / 次のステップ
 
 - レビューCLI（`review_batch.ts`）の具体的なUX（承認・却下・その場編集のコマンド設計）
 - 一意性セルフチェックの`confidence`閾値・類似度閾値（0.6, 0.8）の妥当性検証（実データで調整予定）
-- Gemini API失敗時のリトライ戦略
+- ~~Gemini API失敗時のリトライ戦略~~ **解決済み**: `gemini.ts`の`generateJson`/`generateJsonArray`が429/5xx対象に5回・指数バックオフでリトライする実装済み（コード上は「17章」と参照されているが本ファイルには未記載だった。10章と合わせて整理が必要——上記「前提として発見した既存実装とのズレ」参照）。
 - ドリルセッションの出題順（弱点カテゴリを優先出題するか、ランダムか）のロジック
 - 弱点ダッシュボードの「警告色」閾値（70%）の妥当性は実データで調整
+- 自動問題生成（10章）の定期実行化（cron等）——無人実行時のエラー通知・Gemini APIコスト上限の設計が必要
+- DESIGN.mdの8章（Gemini APIパイプライン）が実装（13章のイディオム・16章のvocab_tags code分離・17章のリトライ戦略・19章のセルフチェック改訂を含む一連の変更）から大きく取り残されている（10章冒頭「前提として発見した既存実装とのズレ」参照）。実装に追いつく形での全面的な書き直しが必要
 
 

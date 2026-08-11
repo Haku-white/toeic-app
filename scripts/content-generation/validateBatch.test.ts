@@ -125,6 +125,46 @@ describe('validateBatch (grammar)', () => {
     expect((itemUpdates[0].fields.self_check_payload as { solved_index: number }).solved_index).toBe(0)
   })
 
+  it('flags an in-batch duplicate question_text (10.9) without calling duplicate check or self-check for it', async () => {
+    generateJson.mockResolvedValue({ reasoning: 'r', solved_index: 0, is_ambiguous: false, confidence: 0.95 })
+    const supabase = buildSupabase([
+      { id: 'item-1', raw_payload: validGrammarItem, status: 'pending_validation' },
+      {
+        id: 'item-2',
+        // 前後の空白・大文字小文字だけが異なる同一質問文（正規化後に一致する）
+        raw_payload: { ...validGrammarItem, question_text: `  ${validGrammarItem.question_text.toUpperCase()}  ` },
+        status: 'pending_validation',
+      },
+    ])
+
+    const result = await validateBatch('batch-1', { supabase, generateJson } as unknown as Parameters<typeof validateBatch>[1])
+
+    expect(result).toEqual({ total: 2, autoPassed: 1, needsReview: 1, totalItemsInBatch: 2 })
+    expect(itemUpdates[0].fields.status).toBe('auto_passed') // item-1（先発）は通常どおり通過
+    expect(itemUpdates[1].fields.status).toBe('needs_review') // item-2（後発）が重複として弾かれる
+    expect((itemUpdates[1].fields.validation_errors as string[])[0]).toContain('同一バッチ内の他の項目')
+    expect((itemUpdates[1].fields.validation_errors as string[])[0]).toContain(validGrammarItem.question_text)
+    // 重複と判定された時点でDB近似重複検出・セルフチェックの呼び出しは1回分（item-1分）のみ
+    expect(rpcMock).toHaveBeenCalledTimes(1)
+    expect(generateJson).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses error.message (not "[object Object]") when an unexpected non-Error value is thrown (10.10)', async () => {
+    // SupabaseのPostgrestErrorはError継承ではないプレーンオブジェクトのため、
+    // 素の`String(error)`だと"[object Object]"になってしまう（10.10参照）。
+    rpcMock.mockResolvedValue({ data: null, error: { message: 'db unavailable', code: 'PGRST001' } })
+    const supabase = buildSupabase([{ id: 'item-1', raw_payload: validGrammarItem, status: 'pending_validation' }])
+
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const result = await validateBatch('batch-1', { supabase, generateJson } as unknown as Parameters<typeof validateBatch>[1])
+    consoleErrorSpy.mockRestore()
+
+    expect(result).toEqual({ total: 1, autoPassed: 0, needsReview: 1, totalItemsInBatch: 1 })
+    const message = (itemUpdates[0].fields.validation_errors as string[])[0]
+    expect(message).not.toContain('[object Object]')
+    expect(message).toContain('db unavailable')
+  })
+
   it('marks an item needs_review when the self-check disagrees with the declared correct_index', async () => {
     generateJson.mockResolvedValue({ reasoning: 'r', solved_index: 1, is_ambiguous: false, confidence: 0.95 })
     const supabase = buildSupabase([{ id: 'item-1', raw_payload: validGrammarItem, status: 'pending_validation' }])
@@ -141,9 +181,15 @@ describe('validateBatch (grammar)', () => {
     generateJson
       .mockRejectedValueOnce(new Error('solved_index out of range'))
       .mockResolvedValueOnce({ reasoning: 'r', solved_index: 0, is_ambiguous: false, confidence: 0.95 })
+    // 2件は別々の質問文にする（同一質問文だと10.9のバッチ内自己重複チェックに
+    // 先に引っかかってしまい、本テストが検証したいセルフチェックの例外処理に到達しない）。
     const supabase = buildSupabase([
       { id: 'item-1', raw_payload: validGrammarItem, status: 'pending_validation' },
-      { id: 'item-2', raw_payload: validGrammarItem, status: 'pending_validation' },
+      {
+        id: 'item-2',
+        raw_payload: { ...validGrammarItem, question_text: 'Another distinct question text.' },
+        status: 'pending_validation',
+      },
     ])
 
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -229,5 +275,50 @@ describe('validateBatch (vocab)', () => {
     expect(result).toEqual({ total: 1, autoPassed: 1, needsReview: 0, totalItemsInBatch: 1 })
     expect(itemUpdates[0].fields.status).toBe('auto_passed')
     expect(generateJson).not.toHaveBeenCalled()
+  })
+
+  it('flags an in-batch duplicate word+part_of_speech (10.9) without calling duplicate check for it', async () => {
+    const itemUpdates: Array<{ id: string; fields: Record<string, unknown> }> = []
+    const rpcMock = vi.fn().mockResolvedValue({ data: [], error: null })
+    const generateJson = vi.fn()
+
+    const from = vi.fn((table: string) => {
+      if (table === 'generation_batches') {
+        const builder = makeQueryBuilder({ data: { content_type: 'vocab' }, error: null })
+        builder.update = vi.fn(() => builder)
+        return builder
+      }
+      if (table === 'generation_batch_items') {
+        const builder = makeQueryBuilder({
+          data: [
+            { id: 'item-1', raw_payload: validVocabItem, status: 'pending_validation' },
+            { id: 'item-2', raw_payload: validVocabItem, status: 'pending_validation' },
+          ],
+          error: null,
+        })
+        builder.update = vi.fn((fields: Record<string, unknown>) => {
+          const chained = { ...builder }
+          chained.eq = vi.fn((_col: string, id: string) => {
+            itemUpdates.push({ id, fields })
+            return Promise.resolve({ data: null, error: null })
+          })
+          return chained
+        })
+        return builder
+      }
+      if (table === 'vocab_words') {
+        return makeQueryBuilder({ data: [], error: null })
+      }
+      throw new Error(`unexpected table: ${table}`)
+    })
+    const supabase = { from, rpc: rpcMock } as unknown as Parameters<typeof validateBatch>[1]['supabase']
+
+    const result = await validateBatch('batch-2', { supabase, generateJson } as unknown as Parameters<typeof validateBatch>[1])
+
+    expect(result).toEqual({ total: 2, autoPassed: 1, needsReview: 1, totalItemsInBatch: 2 })
+    expect(itemUpdates[0].fields.status).toBe('auto_passed')
+    expect(itemUpdates[1].fields.status).toBe('needs_review')
+    expect((itemUpdates[1].fields.validation_errors as string[])[0]).toContain('word+part_of_speech')
+    expect(rpcMock).toHaveBeenCalledTimes(1)
   })
 })

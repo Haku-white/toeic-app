@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildGrammarPrompt, GRAMMAR_JSON_SCHEMA } from './promptTemplates'
-import type { generateJson as generateJsonFn } from './gemini'
+import type { generateJsonArray as generateJsonArrayFn } from './gemini'
 import { loadEnv } from './env'
 
 export interface GenerateGrammarBatchParams {
@@ -14,12 +14,14 @@ export interface GenerateGrammarBatchParams {
 
 export interface GenerateGrammarBatchDeps {
   supabase: SupabaseClient
-  generateJson: typeof generateJsonFn
+  generateJsonArray: typeof generateJsonArrayFn
 }
 
 export interface GenerateGrammarBatchResult {
   batchId: string
   itemCount: number
+  /** 10.6: Gemini出力が最大トークン数で切り詰められた可能性がある場合true */
+  truncated: boolean
 }
 
 const EXISTING_SAMPLES_LIMIT = 30
@@ -32,7 +34,7 @@ export async function generateGrammarBatch(
   params: GenerateGrammarBatchParams,
   deps: GenerateGrammarBatchDeps,
 ): Promise<GenerateGrammarBatchResult> {
-  const { supabase, generateJson } = deps
+  const { supabase, generateJsonArray } = deps
   // CLIの--model指定 > .envのGEMINI_MODEL > env.tsのデフォルト、の優先順位で解決する
   // （以前は'gemini-2.5-flash'をここに直書きしており、.envのGEMINI_MODELが無視されていた）。
   const modelName = params.modelName ?? loadEnv().GEMINI_MODEL
@@ -76,7 +78,11 @@ export async function generateGrammarBatch(
     existingQuestionSamples: ((existingRows ?? []) as { question_text: string }[]).map((r) => r.question_text),
   })
 
-  const items = await generateJson<unknown[]>({ prompt, schema: GRAMMAR_JSON_SCHEMA, model: modelName })
+  const { items, truncated, parseRecovered } = await generateJsonArray<unknown>({
+    prompt,
+    schema: GRAMMAR_JSON_SCHEMA,
+    model: modelName,
+  })
 
   if (items.length > 0) {
     const { error: itemsError } = await supabase.from('generation_batch_items').insert(
@@ -89,11 +95,17 @@ export async function generateGrammarBatch(
     if (itemsError) throw itemsError
   }
 
+  // 10.6: 切り詰め・パース救済が起きた場合はnotesに残す（原因追跡用、20260812の教訓と同じ思想）。
+  const notes =
+    truncated || parseRecovered
+      ? `Gemini出力が最大トークン数で切り詰められた可能性があります（依頼${params.count}件中${items.length}件のみ生成・保存）。`
+      : null
+
   const { error: updateError } = await supabase
     .from('generation_batches')
-    .update({ generated_count: items.length, status: 'validating' })
+    .update({ generated_count: items.length, status: 'validating', notes })
     .eq('id', batchId)
   if (updateError) throw updateError
 
-  return { batchId, itemCount: items.length }
+  return { batchId, itemCount: items.length, truncated: truncated || parseRecovered }
 }

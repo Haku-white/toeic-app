@@ -60,24 +60,24 @@ describe('generateGrammarBatch', () => {
         category_code: 'subjunctive',
       },
     ]
-    const generateJson = vi.fn().mockResolvedValue(geminiItems)
+    const generateJsonArray = vi.fn().mockResolvedValue({ items: geminiItems, truncated: false, parseRecovered: false })
 
     const result = await generateGrammarBatch(
       { categoryCode: 'subjunctive', count: 1, difficulty: 4, targetBand: 730 },
-      { supabase, generateJson },
+      { supabase, generateJsonArray },
     )
 
-    expect(result).toEqual({ batchId: 'batch-1', itemCount: 1 })
+    expect(result).toEqual({ batchId: 'batch-1', itemCount: 1, truncated: false })
 
     // プロンプトに既存問題サンプルが埋め込まれていること
-    expect(generateJson).toHaveBeenCalledTimes(1)
-    const promptArg = generateJson.mock.calls[0][0].prompt as string
+    expect(generateJsonArray).toHaveBeenCalledTimes(1)
+    const promptArg = generateJsonArray.mock.calls[0][0].prompt as string
     expect(promptArg).toContain('仮定法（subjunctive）')
     expect(promptArg).toContain('If I had more time...')
 
     // --modelを指定しない場合、.env(env.GEMINI_MODEL)の値がそのままモデル名として使われること
     // （以前は'gemini-2.5-flash'が直書きされておりGEMINI_MODELが無視されていた不具合の再発防止）
-    expect(generateJson.mock.calls[0][0].model).toBe('gemini-test-model')
+    expect(generateJsonArray.mock.calls[0][0].model).toBe('gemini-test-model')
     const batchInsertBuilder = fromMock.mock.results.find(
       (_r, i) => fromMock.mock.calls[i][0] === 'generation_batches',
     )!.value
@@ -98,20 +98,46 @@ describe('generateGrammarBatch', () => {
       .map((call, i) => ({ call, result: fromMock.mock.results[i].value }))
       .filter((c) => c.call[0] === 'generation_batches')
     const updateBuilder = batchesCalls[batchesCalls.length - 1].result
-    expect(updateBuilder.update).toHaveBeenCalledWith({ generated_count: 1, status: 'validating' })
+    expect(updateBuilder.update).toHaveBeenCalledWith({ generated_count: 1, status: 'validating', notes: null })
+  })
+
+  it('records a note on generation_batches when the Gemini output was truncated (10.6)', async () => {
+    const fromMock = vi.fn((table: string) => {
+      if (table === 'grammar_categories') return makeQueryBuilder({ data: { id: 3, name_ja: '仮定法' }, error: null })
+      if (table === 'generation_batches') return makeQueryBuilder({ data: { id: 'batch-trunc' }, error: null })
+      if (table === 'grammar_questions') return makeQueryBuilder({ data: [], error: null })
+      if (table === 'generation_batch_items') return makeQueryBuilder({ data: null, error: null })
+      throw new Error(`unexpected table: ${table}`)
+    })
+    const supabase = { from: fromMock } as unknown as Parameters<typeof generateGrammarBatch>[1]['supabase']
+    const generateJsonArray = vi.fn().mockResolvedValue({ items: [], truncated: true, parseRecovered: true })
+
+    const result = await generateGrammarBatch(
+      { categoryCode: 'subjunctive', count: 8, difficulty: 4, targetBand: 730 },
+      { supabase, generateJsonArray },
+    )
+
+    expect(result).toEqual({ batchId: 'batch-trunc', itemCount: 0, truncated: true })
+    const batchesCalls = fromMock.mock.calls
+      .map((call, i) => ({ call, result: fromMock.mock.results[i].value }))
+      .filter((c) => c.call[0] === 'generation_batches')
+    const updateBuilder = batchesCalls[batchesCalls.length - 1].result
+    expect(updateBuilder.update).toHaveBeenCalledWith(
+      expect.objectContaining({ notes: expect.stringContaining('依頼8件中0件のみ生成・保存') }),
+    )
   })
 
   it('propagates an error when the category lookup fails', async () => {
     const fromMock = vi.fn(() => makeQueryBuilder({ data: null, error: new Error('no such category') }))
     const supabase = { from: fromMock } as unknown as Parameters<typeof generateGrammarBatch>[1]['supabase']
-    const generateJson = vi.fn()
+    const generateJsonArray = vi.fn()
 
     await expect(
       generateGrammarBatch(
         { categoryCode: 'unknown', count: 1, difficulty: 1, targetBand: 600 },
-        { supabase, generateJson },
+        { supabase, generateJsonArray },
       ),
     ).rejects.toThrow('no such category')
-    expect(generateJson).not.toHaveBeenCalled()
+    expect(generateJsonArray).not.toHaveBeenCalled()
   })
 })

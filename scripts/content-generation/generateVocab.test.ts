@@ -57,21 +57,21 @@ describe('generateVocabBatch', () => {
         tags: ['ビジネス'],
       },
     ]
-    const generateJson = vi.fn().mockResolvedValue(geminiItems)
+    const generateJsonArray = vi.fn().mockResolvedValue({ items: geminiItems, truncated: false, parseRecovered: false })
 
     const result = await generateVocabBatch(
       { tagName: 'ビジネス', count: 1, targetBand: 730 },
-      { supabase, generateJson },
+      { supabase, generateJsonArray },
     )
 
-    expect(result).toEqual({ batchId: 'batch-2', itemCount: 1 })
+    expect(result).toEqual({ batchId: 'batch-2', itemCount: 1, truncated: false })
 
-    const promptArg = generateJson.mock.calls[0][0].prompt as string
+    const promptArg = generateJsonArray.mock.calls[0][0].prompt as string
     expect(promptArg).toContain('【テーマ】\nビジネス')
     expect(promptArg).toContain('- negotiate')
 
     // --modelを指定しない場合、.env(env.GEMINI_MODEL)の値がそのままモデル名として使われること
-    expect(generateJson.mock.calls[0][0].model).toBe('gemini-test-model')
+    expect(generateJsonArray.mock.calls[0][0].model).toBe('gemini-test-model')
 
     const itemsBuilder = fromMock.mock.results.find(
       (_r, i) => fromMock.mock.calls[i][0] === 'generation_batch_items',
@@ -89,25 +89,50 @@ describe('generateVocabBatch', () => {
       throw new Error(`unexpected table: ${table}`)
     })
     const supabase = { from: fromMock } as unknown as Parameters<typeof generateVocabBatch>[1]['supabase']
-    const generateJson = vi.fn().mockResolvedValue([])
+    const generateJsonArray = vi.fn().mockResolvedValue({ items: [], truncated: false, parseRecovered: false })
 
     const result = await generateVocabBatch(
       { tagName: '新テーマ', count: 1, targetBand: 600 },
-      { supabase, generateJson },
+      { supabase, generateJsonArray },
     )
 
-    expect(result).toEqual({ batchId: 'batch-3', itemCount: 0 })
-    const promptArg = generateJson.mock.calls[0][0].prompt as string
+    expect(result).toEqual({ batchId: 'batch-3', itemCount: 0, truncated: false })
+    const promptArg = generateJsonArray.mock.calls[0][0].prompt as string
     expect(promptArg).toContain('（なし）')
+  })
+
+  it('records a note on generation_batches when the Gemini output was truncated (10.6)', async () => {
+    const fromMock = vi.fn((table: string) => {
+      if (table === 'generation_batches') return makeQueryBuilder({ data: { id: 'batch-trunc' }, error: null })
+      if (table === 'vocab_words') return makeQueryBuilder({ data: [], error: null })
+      if (table === 'generation_batch_items') return makeQueryBuilder({ data: null, error: null })
+      throw new Error(`unexpected table: ${table}`)
+    })
+    const supabase = { from: fromMock } as unknown as Parameters<typeof generateVocabBatch>[1]['supabase']
+    const generateJsonArray = vi.fn().mockResolvedValue({ items: [], truncated: true, parseRecovered: true })
+
+    const result = await generateVocabBatch(
+      { tagName: 'ビジネス', count: 8, targetBand: 730 },
+      { supabase, generateJsonArray },
+    )
+
+    expect(result).toEqual({ batchId: 'batch-trunc', itemCount: 0, truncated: true })
+    const batchesCalls = fromMock.mock.calls
+      .map((call, i) => ({ call, result: fromMock.mock.results[i].value }))
+      .filter((c) => c.call[0] === 'generation_batches')
+    const updateBuilder = batchesCalls[batchesCalls.length - 1].result
+    expect(updateBuilder.update).toHaveBeenCalledWith(
+      expect.objectContaining({ notes: expect.stringContaining('依頼8件中0件のみ生成・保存') }),
+    )
   })
 
   it('throws when tagName is omitted and contentKind is the default "vocab"', async () => {
     const supabase = { from: vi.fn() } as unknown as Parameters<typeof generateVocabBatch>[1]['supabase']
-    const generateJson = vi.fn()
-    await expect(generateVocabBatch({ count: 1, targetBand: 600 }, { supabase, generateJson })).rejects.toThrow(
-      'tagName は必須です',
-    )
-    expect(generateJson).not.toHaveBeenCalled()
+    const generateJsonArray = vi.fn()
+    await expect(
+      generateVocabBatch({ count: 1, targetBand: 600 }, { supabase, generateJsonArray }),
+    ).rejects.toThrow('tagName は必須です')
+    expect(generateJsonArray).not.toHaveBeenCalled()
   })
 
   describe('contentKind="idiom" (13.2)', () => {
@@ -134,16 +159,16 @@ describe('generateVocabBatch', () => {
           tags: [IDIOM_TAG_NAME],
         },
       ]
-      const generateJson = vi.fn().mockResolvedValue(geminiItems)
+      const generateJsonArray = vi.fn().mockResolvedValue({ items: geminiItems, truncated: false, parseRecovered: false })
 
       const result = await generateVocabBatch(
         { contentKind: 'idiom', count: 1, targetBand: 730 },
-        { supabase, generateJson },
+        { supabase, generateJsonArray },
       )
 
-      expect(result).toEqual({ batchId: 'batch-4', itemCount: 1 })
+      expect(result).toEqual({ batchId: 'batch-4', itemCount: 1, truncated: false })
 
-      const promptArg = generateJson.mock.calls[0][0].prompt as string
+      const promptArg = generateJsonArray.mock.calls[0][0].prompt as string
       expect(promptArg).toContain('イディオム（慣用表現）')
       expect(promptArg).toContain('- get the ball rolling')
       expect(promptArg).not.toContain('【テーマ】') // vocab.md固有の見出しは含まれない
