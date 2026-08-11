@@ -17,35 +17,105 @@ function formatPercent(rate: number): string {
   return `${Math.round(rate * 100)}%`
 }
 
+const GAUGE_CENTER_X = 50
+const GAUGE_CENTER_Y = 56
+const GAUGE_ARC_RADIUS = 30
+const GAUGE_TICK_INNER_RADIUS = 36
+const GAUGE_TICK_OUTER_MINOR_RADIUS = 40
+const GAUGE_TICK_OUTER_MAJOR_RADIUS = 43
+const GAUGE_LABEL_RADIUS = 46
+const GAUGE_NEEDLE_RADIUS = 24
+const GAUGE_TICK_FRACTIONS = [0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1]
+const GAUGE_LABELS: { fraction: number; text: string }[] = [
+  { fraction: 0, text: '0' },
+  { fraction: 0.5, text: '50' },
+  { fraction: 1, text: '100' },
+]
+
+function gaugePoint(fraction: number, radius: number) {
+  const angle = Math.PI * fraction
+  return {
+    x: GAUGE_CENTER_X - radius * Math.cos(angle),
+    y: GAUGE_CENTER_Y - radius * Math.sin(angle),
+  }
+}
+
 /**
- * 「計器盤」コンセプトの弧状メーター。正答率をトラック（neutral-300）に対する
- * 塗り分けで表現し、針色はStatRowのカード色と同じロジック（correct/incorrect）で
- * 一貫させる（紫は評価色と混同させないため使わない、DESIGN.md 20章参照）。
+ * 「計器盤」コンセプトのアナログ針式メーター（DESIGN.md Design Canvas
+ * 「Weakness Dashboard Gauges」1a案を移植）。正答率をトラック（neutral-300）に
+ * 対する塗り分け＋針で表現する。配色は既存方針を踏襲し2階調（correct/incorrect）の
+ * ままとし、1a案の3階調（green/amber/red）は採用しない。針色はStatRowのカード色と
+ * 同じロジックで一貫させる（紫は評価色と混同させないため使わない、DESIGN.md 20章参照）。
+ * 目盛りはminor/majorの2段階、ラベルは0/50/100の3点のみに間引いている。
  */
 function Gauge({ value, isWeak }: { value: number; isWeak: boolean }) {
   const clamped = Math.max(0, Math.min(1, value))
-  const angle = Math.PI * clamped
-  const x = (44 - 38 * Math.cos(angle)).toFixed(1)
-  const y = (46 - 38 * Math.sin(angle)).toFixed(1)
+  const start = gaugePoint(0, GAUGE_ARC_RADIUS)
+  const end = gaugePoint(1, GAUGE_ARC_RADIUS)
+  const valueEnd = gaugePoint(clamped, GAUGE_ARC_RADIUS)
+  const needleTip = gaugePoint(clamped, GAUGE_NEEDLE_RADIUS)
+  const needleColorClass = isWeak ? 'stroke-incorrect-600' : 'stroke-correct-600'
 
   return (
-    <svg width="56" height="33" viewBox="0 0 88 52" aria-hidden="true" className="shrink-0">
+    <svg width="104" height="64" viewBox="0 0 100 62" aria-hidden="true" className="shrink-0">
+      {GAUGE_TICK_FRACTIONS.map((fraction) => {
+        const isMajor = fraction % 0.25 === 0
+        const inner = gaugePoint(fraction, GAUGE_TICK_INNER_RADIUS)
+        const outer = gaugePoint(fraction, isMajor ? GAUGE_TICK_OUTER_MAJOR_RADIUS : GAUGE_TICK_OUTER_MINOR_RADIUS)
+        return (
+          <line
+            key={fraction}
+            x1={inner.x.toFixed(1)}
+            y1={inner.y.toFixed(1)}
+            x2={outer.x.toFixed(1)}
+            y2={outer.y.toFixed(1)}
+            strokeWidth={isMajor ? 1.5 : 1}
+            className={isMajor ? 'stroke-neutral-400' : 'stroke-neutral-300'}
+          />
+        )
+      })}
+      {GAUGE_LABELS.map(({ fraction, text }) => {
+        const pos = gaugePoint(fraction, GAUGE_LABEL_RADIUS)
+        return (
+          <text
+            key={text}
+            x={pos.x.toFixed(1)}
+            y={pos.y.toFixed(1)}
+            fontSize="9"
+            textAnchor="middle"
+            dominantBaseline="middle"
+            className="fill-neutral-400"
+          >
+            {text}
+          </text>
+        )
+      })}
       <path
-        d="M6 46 A38 38 0 0 1 82 46"
+        d={`M${start.x.toFixed(1)} ${start.y.toFixed(1)} A${GAUGE_ARC_RADIUS} ${GAUGE_ARC_RADIUS} 0 0 1 ${end.x.toFixed(1)} ${end.y.toFixed(1)}`}
         fill="none"
-        strokeWidth="8"
+        strokeWidth="7"
         strokeLinecap="round"
         className="stroke-neutral-300"
       />
       {clamped > 0 && (
         <path
-          d={`M6 46 A38 38 0 0 1 ${x} ${y}`}
+          d={`M${start.x.toFixed(1)} ${start.y.toFixed(1)} A${GAUGE_ARC_RADIUS} ${GAUGE_ARC_RADIUS} 0 0 1 ${valueEnd.x.toFixed(1)} ${valueEnd.y.toFixed(1)}`}
           fill="none"
-          strokeWidth="8"
+          strokeWidth="7"
           strokeLinecap="round"
-          className={isWeak ? 'stroke-incorrect-600' : 'stroke-correct-600'}
+          className={needleColorClass}
         />
       )}
+      <line
+        x1={GAUGE_CENTER_X}
+        y1={GAUGE_CENTER_Y}
+        x2={needleTip.x.toFixed(1)}
+        y2={needleTip.y.toFixed(1)}
+        strokeWidth="2"
+        strokeLinecap="round"
+        className={needleColorClass}
+      />
+      <circle cx={GAUGE_CENTER_X} cy={GAUGE_CENTER_Y} r="2.5" className="fill-neutral-600" />
     </svg>
   )
 }
@@ -79,12 +149,16 @@ function StatRow({
           </span>
         )}
       </span>
-      <span className="flex items-center gap-2">
+      <span className="flex items-center gap-3">
         <Gauge value={accuracyRate} isWeak={isWeak} />
-        <span className={`font-mono text-sm tabular-nums ${isWeak ? 'text-incorrect-700' : 'text-correct-700'}`}>
-          {formatPercent(accuracyRate)}
+        <span className="flex flex-col items-end">
+          <span
+            className={`font-mono text-base font-semibold tabular-nums ${isWeak ? 'text-incorrect-700' : 'text-correct-700'}`}
+          >
+            {formatPercent(accuracyRate)}
+          </span>
+          <span className="font-mono text-xs tabular-nums text-neutral-500">（{totalAttempts}問）</span>
         </span>
-        <span className="font-mono text-xs tabular-nums text-neutral-500">（{totalAttempts}問）</span>
       </span>
     </Link>
   )
