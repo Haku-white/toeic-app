@@ -85,6 +85,7 @@
 - 2026-08-12: 旧`service_role`キー失効前の最終確認を実施（23.5追記、DB・`.env`・キー自体の変更は無し）。`.env`のクラウド統一状態を再確認（URL/キーとも一致）。`.env`クラウド統一（23.6・commit `8394feb`）後に`createSupabaseAdminClient`/`ask-tutor`の再確認が未実施だったため、一時検証スクリプト（作業後削除）で実施——オーバーライド無しの実際の`.env`のもとで`generation_batch_items=500`・`generation_batches=33`（初回確認と一致）、`ask-tutor`はHTTP 200で成功。**その過程でSupabase公式ドキュメント・GitHub issue `supabase/supabase#37648`を調査し、Edge Functionsの予約環境変数`SUPABASE_SERVICE_ROLE_KEY`はレガシーキー専用で新`sb_secret_`キーには自動更新されず、レガシーキーを無効化するとこの変数に依存するEdge Functionが動作しなくなるという実例報告を確認した**。`ask-tutor/index.ts`はこの予約変数を直接参照しているため、`.env`側の移行（23.6）とは無関係に旧キー失効の影響を受ける。**結論: 旧キーの失効は現時点で非推奨**。安全に失効させるには`ask-tutor/index.ts`の新キー対応実装・再デプロイ・再確認が別途必要（ユーザーの確認を要する変更のため未着手）。
 - 2026-08-12: `ask-tutor/index.ts`を予約変数`SUPABASE_SERVICE_ROLE_KEY`依存から非予約名のカスタムシークレット`SB_SECRET_KEY`依存に変更し、クラウドへ再デプロイした（23.7、ユーザーの明示的な承認を得て実施）。当初提案していた「リクエストの`apikey`ヘッダーから鍵を取得する」方式は、フロントエンドが送る`apikey`がanon/publishableキーであり、`increment_tutor_usage`RPC（service_role専用にEXECUTE権限をREVOKE済み）の呼び出しが壊れることが実装前の調査で判明したため採用せず、ユーザーに確認の上で非予約名カスタムシークレット方式に変更した。`supabase secrets set`で`SB_SECRET_KEY`（新`sb_secret_`キーの値）を新規登録→`supabase functions deploy ask-tutor`で再デプロイ→使い捨てテストユーザーによるE2E確認（HTTP 200・`tutor_usage.request_count`が意図通り`1`に増加）まで実施し成功。ローカル開発用`supabase/functions/.env.example`・`.env`（gitignore対象）も同様に更新。**この変更により`ask-tutor`は旧キーに一切依存しなくなり、`scripts/content-generation`（23.6で移行済み）と合わせて、旧`service_role`キーを失効させても問題ないと判断した**（失効操作自体はユーザーがSupabaseダッシュボードで実施）。
 - 2026-08-12: ドリル結果サマリー画面（`SessionSummary`）をclaude.ai Design Canvas「TOEIC-app ホーム画面リデザイン」プロジェクトの2a案「計器編隊型」に基づいてリデザインした（28章、新設）。`src/components/SessionSummary.tsx`を全面書き換え、GrammarDrill.tsx/MixedDrill.tsxの完了画面ボタンを新設`actions`スロット/`SessionSummaryAction`に移行。実装過程でTailwind v4のテーマトークンCSS変数tree-shaking（ソース中にリテラルなユーティリティクラスとして使われていないトークンは`var(--color-*)`参照が空文字列になる）に起因する不具合を発見し、`WeakPoints.tsx`の`Gauge`と同じSVG `stroke-dasharray`方式に作り直して解消した。`npm test`（300件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。一時的な非認証プレビュールートでブラウザ実地確認済み（確認後に削除、コミット対象外）。
+- 2026-08-12: Home画面のヘッダーを、同Design Canvasの5a案「夜間飛行型」に基づいて改修した（24.4追記）。1cの構成（四隅のネジ・`CONTROL PANEL`ヘッダー・ロッカースイッチ行・ログアウト）は維持し、最上部の「ログイン成功」表示のみ、夜の地球を見下ろす暗色バナー（地球のリム光・街の光・上昇する破線トレース+航空機マーカー）に差し替えた。実装中にTailwind v4の`rotate-*`任意値記法の落とし穴（符号はブラケット内部`rotate-[-24deg]`に置く必要があり、`-rotate-[24deg]`は無効なクラスとして静かに無視される。またv4の`rotate`は`transform`ではなくCSS標準の独立した`rotate`プロパティとして出力される）を発見・記録した。`npm test`（300件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。一時的な非認証プレビュールートでブラウザ実地確認済み（確認後に削除、コミット対象外）。
 
 ## 1. 要件概要
 
@@ -1130,6 +1131,16 @@ Design Canvas上には「精密機械の操作盤」という共通コンセプ�
 - 既存`Home.test.tsx`（4件）は無改修のまま全件通過（役割・アクセシブルネーム・ショートカットバッジの文字列一致で検証しているため、ビジュアル変更のみでは壊れない設計になっていたことを確認）。
 - `npm test`（289件）・`npm run lint`（0件）・`npm run typecheck`（0件）、いずれも通過。
 - ブラウザでの実地確認: ローカルSupabase（フロントエンドの`.env.local`は`scripts/content-generation`とは別系統で、常にローカルを指す運用のまま——23章のクラウド統一はサーバー側CLIスクリプトのみが対象）に使い捨てテストユーザーを作成し、ログイン後のHome画面表示とショートカットキー（`c`→`/grammar`）遷移を目視確認した。検証用スクリプト・テストユーザーはいずれも作業後に削除済み（コミットにも含まれない）。
+
+### 24.4 5a案「夜間飛行型」ヘッダーへの改修
+
+Design Canvasに追加された5番目のターン（1cをベースに、上部だけ「夜の地球を見下ろす視点」に変えた5a案）に基づき、1cの構成（四隅のネジ・ヘアラインの`CONTROL PANEL`ヘッダー・ロッカースイッチ行・ログアウト）はそのまま、最上部の「ログイン成功」表示部分のみを夜間飛行ヘッダーに差し替えた。
+
+- カード最上部に高さ140pxの暗色バナー（`oklch(15% .025 300)`〜`oklch(24% .06 300)`のグラデーション）を新設し、下端からはみ出す形の地球（`radial-gradient`の円+リム光の線2本）・街の光（座標配列`CITY_LIGHTS`で管理する8個の光点）・上昇していく破線トレース（SVG）+航空機を模した三角形マーカーを配置した。「ログイン成功」「{メールアドレス}」の文字は、この暗色バナー上に白系の色で重ねる形に移設し（1cにあった正常時パルスドットは5aの原案に存在しないため踏襲せず削除）、CONTROL PANEL以下は無改修。
+- バナー自体・地球・光の各グラデーションは、色域(hue 300)こそ既存の`--color-accent-*`と同系統だが、既存トークンでは暗すぎる階調（`accent-900`より暗い）をカバーできないため、28章で確立した「静的なグラデーションは`bg-[...]`のTailwind任意値記法にリテラルに埋め込む」方針に倣い、デザイン原案のoklch値をそのままリテラルとして埋め込んだ（新規の意味的トークンとしては追加しない、あくまで一枚絵の装飾）。
+- **実装中に踏んだ落とし穴**: 航空機マーカーの三角形（`border-l-*`のCSS三角形テクニック）の回転に`-rotate-[24deg]`（負号をブラケットの外に置く記法）を使ったところ効果が出なかった。Tailwind v4の任意値記法では符号をブラケット内部に置く`rotate-[-24deg]`が正しい書式で、外側に置く`-rotate-[24deg]`は無効なクラス名として静かに無視される（エラーにならない）。さらに調査中、Tailwind v4は`rotate-*`ユーティリティを（v3以前の`transform: rotate(...)`ではなく）CSS標準の独立した`rotate`プロパティとして出力することも確認した（`getComputedStyle(el).transform`ではなく`.rotate`を見る必要がある）。今後このプロジェクトで`rotate-*`/`scale-*`等の変形系ユーティリティを使う際は両方の教訓に注意すること。
+- テスト: 既存`Home.test.tsx`（4件）は無改修のまま全件通過。`npm test`（300件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。
+- ブラウザでの実地確認: `main.tsx`に一時的な非認証プレビュールート（`/__preview-home`、`Home`要素に固定のダミーセッションを渡すloaderのみ追加）を追加して目視確認した。確認後に削除済み（コミット対象外）。
 
 ---
 
