@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createMemoryRouter, RouterProvider } from 'react-router-dom'
 import type { Session } from '@supabase/supabase-js'
@@ -73,6 +73,10 @@ beforeEach(() => {
   vi.mocked(askTutor).mockReset()
   // Zustandストアはモジュール単位のシングルトンでテスト間を跨いで残るため明示的にリセットする
   useGrammarSessionStore.getState().resetSession()
+})
+
+afterEach(() => {
+  vi.useRealTimers()
 })
 
 describe('GrammarDrill', () => {
@@ -150,7 +154,28 @@ describe('GrammarDrill', () => {
     fireEvent.click(await screen.findByRole('button', { name: '結果を見る' }))
 
     expect(await screen.findByText('セッション完了')).toBeInTheDocument()
-    expect(screen.getByText('2問中2問正解しました。')).toBeInTheDocument()
+    expect(
+      screen.getByText((_content, element) => element?.tagName === 'DIV' && element.textContent === '100%'),
+    ).toBeInTheDocument()
+    expect(screen.getByText('2 / 2')).toBeInTheDocument()
+  })
+
+  it('measures elapsed time from session start to completion and shows it in the summary (28章)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 0, 1, 12, 0, 0))
+    vi.mocked(getGrammarDrillData).mockResolvedValue(drillData)
+    renderGrammarDrill()
+
+    fireEvent.click(await screen.findByRole('button', { name: /will have submitted/ }))
+    fireEvent.click(await screen.findByRole('button', { name: '次の問題へ' }))
+    expect(await screen.findByText('She ___ here since 2020.')).toBeInTheDocument()
+
+    vi.setSystemTime(new Date(2026, 0, 1, 12, 0, 5))
+    fireEvent.click(screen.getByRole('button', { name: /has worked/ }))
+    fireEvent.click(await screen.findByRole('button', { name: '結果を見る' }))
+
+    expect(await screen.findByText('セッション完了')).toBeInTheDocument()
+    expect(screen.getByText('0:05')).toBeInTheDocument()
   })
 
   it('shows the keyboard-shortcut hint', async () => {

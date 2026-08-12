@@ -5,6 +5,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { getGrammarDrillData, submitGrammarAttempt } from '../lib/queries/grammar'
 import { useGrammarSessionStore } from '../stores/grammarSessionStore'
 import AskTutorPanel from '../components/AskTutorPanel'
+import SessionSummary, { SessionSummaryAction } from '../components/SessionSummary'
 
 const CHOICE_LABELS = ['1', '2', '3', '4']
 const COMPLETE_SCREEN_LINK_TO = '/grammar'
@@ -24,12 +25,21 @@ export default function GrammarDrill() {
   const { currentIndex, selectedIndex, correctCount, answeredCount, answer, advance, resetSession } =
     useGrammarSessionStore()
   const questionStartRef = useRef<number>(Date.now())
+  // セッション開始時刻（28章: 結果サマリーの「かかった時間」表示用）。resetSession()と同じ
+  // タイミングで打刻し直す。elapsedMsはセッション完了検知時に一度だけ確定させ、以降固定する
+  // （素朴にDate.now()を毎レンダー計算すると、完了画面に留まっている間の経過も時間に含まれてしまう）。
+  const sessionStartRef = useRef<number>(Date.now())
+  const [elapsedMs, setElapsedMs] = useState<number | null>(null)
   // AskTutorPanelのテキストエリアにフォーカスがある間は、Enterがショートカット「次へ」ではなく
   // 質問送信に使われる（26章）。下部のヒント表示をそれに合わせて切り替えるための状態。
   const [isAskingTutor, setIsAskingTutor] = useState(false)
 
   useEffect(() => {
     resetSession()
+    sessionStartRef.current = Date.now()
+    // categoryCode変更時(カテゴリを跨いだ再訪問)に前回の経過時間表示を持ち越さないためのリセット。
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setElapsedMs(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [categoryCode])
 
@@ -42,6 +52,12 @@ export default function GrammarDrill() {
   const questions = data?.questions
   const currentQuestion = questions?.[currentIndex]
   const isSessionComplete = !!questions && questions.length > 0 && currentIndex >= questions.length
+
+  useEffect(() => {
+    if (isSessionComplete && elapsedMs === null) {
+      setElapsedMs(Date.now() - sessionStartRef.current)
+    }
+  }, [isSessionComplete, elapsedMs])
 
   const handleAnswer = useCallback(
     (index: number) => {
@@ -122,23 +138,21 @@ export default function GrammarDrill() {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-neutral-50 px-4">
         <p className="text-lg font-semibold text-neutral-900">セッション完了</p>
-        <p className="text-sm text-neutral-600">
-          {questions.length}問中{correctCount}問正解しました。
-        </p>
-        <div className="flex gap-3">
-          <Link
-            to="/grammar"
-            className="rounded bg-accent-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500"
-          >
-            カテゴリ一覧に戻る
-          </Link>
-          <Link
-            to="/"
-            className="rounded border border-neutral-300 px-4 py-2 text-sm text-neutral-700 transition-colors hover:bg-neutral-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500"
-          >
-            ホームに戻る
-          </Link>
-        </div>
+        <SessionSummary
+          correctCount={correctCount}
+          totalCount={questions.length}
+          elapsedMs={elapsedMs}
+          actions={
+            <div className="grid grid-cols-2 gap-2.5">
+              <SessionSummaryAction to="/grammar" variant="primary">
+                カテゴリ一覧に戻る
+              </SessionSummaryAction>
+              <SessionSummaryAction to="/" variant="secondary">
+                ホームに戻る
+              </SessionSummaryAction>
+            </div>
+          }
+        />
         <p className="font-mono text-xs text-neutral-400">Enter: カテゴリ一覧に戻る</p>
       </div>
     )

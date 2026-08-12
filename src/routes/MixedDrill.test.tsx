@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createMemoryRouter, RouterProvider } from 'react-router-dom'
 import type { Session } from '@supabase/supabase-js'
@@ -82,6 +82,10 @@ beforeEach(() => {
   vi.mocked(submitVocabReview).mockReset().mockResolvedValue(undefined as never)
   vi.mocked(askTutor).mockReset()
   useMixedDrillSessionStore.getState().resetSession()
+})
+
+afterEach(() => {
+  vi.useRealTimers()
 })
 
 describe('MixedDrill', () => {
@@ -174,13 +178,34 @@ describe('MixedDrill', () => {
     fireEvent.click(await screen.findByRole('button', { name: '結果を見る' }))
 
     expect(await screen.findByText('セッション完了')).toBeInTheDocument()
-    // 数値部分をfont-mono用の<span>で分けているため、pタグ全体のtextContentで照合する
+    // 総合の正答率(2問中2問=100%)。%記号をfont-mono用の<span>で分けているため、divのtextContentで照合する
     expect(
-      screen.getByText((_content, element) => element?.tagName === 'P' && element.textContent === '文法: 1問中1問正解'),
+      screen.getByText((_content, element) => element?.tagName === 'DIV' && element.textContent === '100%'),
     ).toBeInTheDocument()
-    expect(
-      screen.getByText((_content, element) => element?.tagName === 'P' && element.textContent === '語彙: 1問中1問正解'),
-    ).toBeInTheDocument()
+    expect(screen.getByText('2 / 2')).toBeInTheDocument()
+    // カテゴリ別内訳(文法1/1・語彙1/1)は行ごとにラベルと正答率をscopeして確認する
+    const grammarRow = screen.getByText('文法').closest('div')!
+    expect(within(grammarRow).getByText('100%')).toBeInTheDocument()
+    const vocabRow = screen.getByText('語彙').closest('div')!
+    expect(within(vocabRow).getByText('100%')).toBeInTheDocument()
+  })
+
+  it('measures elapsed time from session start to completion and shows it in the summary (28章)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 0, 1, 12, 0, 0))
+    vi.mocked(getMixedDrillQuestions).mockResolvedValue(questions)
+    renderMixedDrill()
+
+    fireEvent.click(await screen.findByRole('button', { name: /will have submitted/ }))
+    fireEvent.click(await screen.findByRole('button', { name: '次の問題へ' }))
+    expect(await screen.findByText('「negotiate」の意味として最も適切なものを選んでください。')).toBeInTheDocument()
+
+    vi.setSystemTime(new Date(2026, 0, 1, 12, 0, 8))
+    fireEvent.click(screen.getByRole('button', { name: /交渉する/ }))
+    fireEvent.click(await screen.findByRole('button', { name: '結果を見る' }))
+
+    expect(await screen.findByText('セッション完了')).toBeInTheDocument()
+    expect(screen.getByText('0:08')).toBeInTheDocument()
   })
 
   it('shows the keyboard-shortcut hint', async () => {

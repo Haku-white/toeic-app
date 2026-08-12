@@ -7,6 +7,7 @@ import { submitVocabReview } from '../lib/queries/vocab'
 import { getMixedDrillQuestions, mapMixedDrillAnswerToRating, type MixedQuestion } from '../lib/queries/mixedDrill'
 import { useMixedDrillSessionStore } from '../stores/mixedDrillSessionStore'
 import AskTutorPanel from '../components/AskTutorPanel'
+import SessionSummary, { SessionSummaryAction } from '../components/SessionSummary'
 
 const CHOICE_LABELS = ['1', '2', '3', '4']
 const GRAMMAR_COUNT = 5
@@ -35,12 +36,19 @@ export default function MixedDrill() {
     resetSession,
   } = useMixedDrillSessionStore()
   const questionStartRef = useRef<number>(Date.now())
+  // セッション開始時刻（28章: 結果サマリーの「かかった時間」表示用）。GrammarDrillと同じ方式。
+  const sessionStartRef = useRef<number>(Date.now())
+  const [elapsedMs, setElapsedMs] = useState<number | null>(null)
   // AskTutorPanelのテキストエリアにフォーカスがある間は、Enterがショートカット「次へ」ではなく
   // 質問送信に使われる（26章）。下部のヒント表示をそれに合わせて切り替えるための状態。
   const [isAskingTutor, setIsAskingTutor] = useState(false)
 
   useEffect(() => {
     resetSession()
+    sessionStartRef.current = Date.now()
+    // マウント時の初期化(elapsedMsは既にnullが初期値だが、意図を明示するため明示的に設定する)。
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setElapsedMs(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -53,6 +61,12 @@ export default function MixedDrill() {
 
   const currentQuestion = questions?.[currentIndex]
   const isSessionComplete = !!questions && questions.length > 0 && currentIndex >= questions.length
+
+  useEffect(() => {
+    if (isSessionComplete && elapsedMs === null) {
+      setElapsedMs(Date.now() - sessionStartRef.current)
+    }
+  }, [isSessionComplete, elapsedMs])
 
   const handleAnswer = useCallback(
     (index: number, question: MixedQuestion) => {
@@ -144,26 +158,20 @@ export default function MixedDrill() {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-neutral-50 px-4">
         <p className="text-lg font-semibold text-neutral-900">セッション完了</p>
-        <div className="space-y-1 text-center text-sm text-neutral-600">
-          <p>
-            文法:{' '}
-            <span className="font-mono tabular-nums">
-              {grammarTotal}問中{grammarCorrect}問正解
-            </span>
-          </p>
-          <p>
-            語彙:{' '}
-            <span className="font-mono tabular-nums">
-              {vocabTotal}問中{vocabCorrect}問正解
-            </span>
-          </p>
-        </div>
-        <Link
-          to="/"
-          className="rounded bg-accent-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500"
-        >
-          ホームに戻る
-        </Link>
+        <SessionSummary
+          correctCount={grammarCorrect + vocabCorrect}
+          totalCount={grammarTotal + vocabTotal}
+          elapsedMs={elapsedMs}
+          categories={[
+            { label: '文法', correct: grammarCorrect, total: grammarTotal },
+            { label: '語彙', correct: vocabCorrect, total: vocabTotal },
+          ]}
+          actions={
+            <SessionSummaryAction to="/" variant="primary">
+              ホームに戻る
+            </SessionSummaryAction>
+          }
+        />
         <p className="font-mono text-xs text-neutral-400">Enter: ホームに戻る</p>
       </div>
     )

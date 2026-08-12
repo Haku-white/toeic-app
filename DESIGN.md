@@ -84,6 +84,7 @@
 - 2026-08-12: Home画面をclaude.ai Design Canvasの1c案「ロッカースイッチ盤」に基づいてリデザインした（24章）。`src/routes/Home.tsx`を全面書き換え、既存の計器盤デザイントークン（`index.css`）にマッピングして実装。既存`Home.test.tsx`は無改修のまま全件通過。`npm test`（289件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。使い捨てテストユーザー（ローカルSupabase）でブラウザ実地確認済み、検証用スクリプト・テストユーザーは作業後に削除（コミット対象外）。旧「未決事項」章を24→27に繰り下げ。
 - 2026-08-12: 旧`service_role`キー失効前の最終確認を実施（23.5追記、DB・`.env`・キー自体の変更は無し）。`.env`のクラウド統一状態を再確認（URL/キーとも一致）。`.env`クラウド統一（23.6・commit `8394feb`）後に`createSupabaseAdminClient`/`ask-tutor`の再確認が未実施だったため、一時検証スクリプト（作業後削除）で実施——オーバーライド無しの実際の`.env`のもとで`generation_batch_items=500`・`generation_batches=33`（初回確認と一致）、`ask-tutor`はHTTP 200で成功。**その過程でSupabase公式ドキュメント・GitHub issue `supabase/supabase#37648`を調査し、Edge Functionsの予約環境変数`SUPABASE_SERVICE_ROLE_KEY`はレガシーキー専用で新`sb_secret_`キーには自動更新されず、レガシーキーを無効化するとこの変数に依存するEdge Functionが動作しなくなるという実例報告を確認した**。`ask-tutor/index.ts`はこの予約変数を直接参照しているため、`.env`側の移行（23.6）とは無関係に旧キー失効の影響を受ける。**結論: 旧キーの失効は現時点で非推奨**。安全に失効させるには`ask-tutor/index.ts`の新キー対応実装・再デプロイ・再確認が別途必要（ユーザーの確認を要する変更のため未着手）。
 - 2026-08-12: `ask-tutor/index.ts`を予約変数`SUPABASE_SERVICE_ROLE_KEY`依存から非予約名のカスタムシークレット`SB_SECRET_KEY`依存に変更し、クラウドへ再デプロイした（23.7、ユーザーの明示的な承認を得て実施）。当初提案していた「リクエストの`apikey`ヘッダーから鍵を取得する」方式は、フロントエンドが送る`apikey`がanon/publishableキーであり、`increment_tutor_usage`RPC（service_role専用にEXECUTE権限をREVOKE済み）の呼び出しが壊れることが実装前の調査で判明したため採用せず、ユーザーに確認の上で非予約名カスタムシークレット方式に変更した。`supabase secrets set`で`SB_SECRET_KEY`（新`sb_secret_`キーの値）を新規登録→`supabase functions deploy ask-tutor`で再デプロイ→使い捨てテストユーザーによるE2E確認（HTTP 200・`tutor_usage.request_count`が意図通り`1`に増加）まで実施し成功。ローカル開発用`supabase/functions/.env.example`・`.env`（gitignore対象）も同様に更新。**この変更により`ask-tutor`は旧キーに一切依存しなくなり、`scripts/content-generation`（23.6で移行済み）と合わせて、旧`service_role`キーを失効させても問題ないと判断した**（失効操作自体はユーザーがSupabaseダッシュボードで実施）。
+- 2026-08-12: ドリル結果サマリー画面（`SessionSummary`）をclaude.ai Design Canvas「TOEIC-app ホーム画面リデザイン」プロジェクトの2a案「計器編隊型」に基づいてリデザインした（28章、新設）。`src/components/SessionSummary.tsx`を全面書き換え、GrammarDrill.tsx/MixedDrill.tsxの完了画面ボタンを新設`actions`スロット/`SessionSummaryAction`に移行。実装過程でTailwind v4のテーマトークンCSS変数tree-shaking（ソース中にリテラルなユーティリティクラスとして使われていないトークンは`var(--color-*)`参照が空文字列になる）に起因する不具合を発見し、`WeakPoints.tsx`の`Gauge`と同じSVG `stroke-dasharray`方式に作り直して解消した。`npm test`（300件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。一時的な非認証プレビュールートでブラウザ実地確認済み（確認後に削除、コミット対象外）。
 
 ## 1. 要件概要
 
@@ -1129,6 +1130,36 @@ Design Canvas上には「精密機械の操作盤」という共通コンセプ�
 - 既存`Home.test.tsx`（4件）は無改修のまま全件通過（役割・アクセシブルネーム・ショートカットバッジの文字列一致で検証しているため、ビジュアル変更のみでは壊れない設計になっていたことを確認）。
 - `npm test`（289件）・`npm run lint`（0件）・`npm run typecheck`（0件）、いずれも通過。
 - ブラウザでの実地確認: ローカルSupabase（フロントエンドの`.env.local`は`scripts/content-generation`とは別系統で、常にローカルを指す運用のまま——23章のクラウド統一はサーバー側CLIスクリプトのみが対象）に使い捨てテストユーザーを作成し、ログイン後のHome画面表示とショートカットキー（`c`→`/grammar`）遷移を目視確認した。検証用スクリプト・テストユーザーはいずれも作業後に削除済み（コミットにも含まれない）。
+
+---
+
+## 28. ドリル結果サマリー画面（`SessionSummary`）の実装とDesign Canvas「2a 計器編隊型」への刷新
+
+> **章番号について**: `SessionSummary`導入時のコードコメントで「28章」が先行して参照されていた（21・24章冒頭の注記と同じ、記述前に番号だけ使われるphantom番号のパターン）ため、本章でその番号をそのまま充てて記述する。
+
+GrammarDrill/MixedDrillの「セッション完了」画面に、正答率・出題数/正答数・かかった時間（さらにMixedDrillでは文法/語彙のカテゴリ内訳）を表示する共通コンポーネント`src/components/SessionSummary.tsx`を新設した。当初はダークパネル+VUメーター風の独自デザインで実装したが、claude.ai Design Canvas「TOEIC-app ホーム画面リデザイン」プロジェクト（24章のHome画面と同一プロジェクト）の2ターン目に提示されていたドリル結果サマリー画面向け3案（2a/2b/2c、いずれも「計器盤」コンセプトの継続）から、ユーザーが選定した2a「計器編隊型」に基づいて全面リデザインした。
+
+### 28.1 2aデザインの実装方針
+
+- 円形速度計（正答率）・LCD高度計風パネル（かかった時間/出題数）・上昇する航跡を表現した水平線バナー・カテゴリ内訳バーという2aのモチーフを、独自のoklch値を新設せず既存の計器盤デザイントークン（`index.css`の`--color-accent-*`/`--color-neutral-*`/`--color-correct-*`/`--color-incorrect-*`）にマッピングして実装した（24章のHome画面リデザインと同じ方針）。
+- 正答率の色分け（70%未満で警告色、`WARNING_THRESHOLD`）は既存方針を維持しつつ、2aの意匠に合わせて円形ゲージの弧の色のみに反映した。中央の%数値自体はneutral-900の固定色とした（デザイン原案でも数値は固定色で、色分けは弧のみが担っている）。
+- 原案にある針（needle）モチーフは意図的に省略した。原案の配置では針が中央の%テキストと重なり視認性を損ねる上、当アプリの他の計器モチーフ（Home.tsx）にも針の前例が無かったため、弧+目盛りリングのみとした。
+- 完了画面の「カテゴリ一覧に戻る」「ホームに戻る」ボタンは、2a原案ではカード内部にベゼル風（取り付けネジのような凹み）で埋め込まれていたため、`SessionSummary`に`actions`スロット（`ReactNode`）を新設し、GrammarDrill/MixedDrillからボタン（新設`SessionSummaryAction`、`primary`/`secondary`の2バリアント）を渡す形にリファクタリングした。GrammarDrillは2ボタン（primary=カテゴリ一覧に戻る/secondary=ホームに戻る）を横並びグリッドで、MixedDrillは1ボタン（primary=ホームに戻る）のみを渡す。各画面のリンク先・ラベル文字列自体は変更していない。
+
+### 28.2 Tailwind v4のテーマトークンtree-shakingで発見した不具合
+
+円形ゲージの弧は当初CSS `conic-gradient`をインライン`style`で実装し、`var(--color-${tone}-500)`のようにJSテンプレートリテラルで色トークンを差し込んでいた。ところがブラウザ実地確認で、正答率が警告閾値未満（`incorrect`トーン）の場合にのみ弧が描画されない不具合を発見した。
+
+原因はTailwind v4が**ソースコード中のリテラルなユーティリティクラス名文字列**からしかテーマトークンのCSS変数を生成しない点にあった。`bg-correct-500`のような実際のクラス名がHome.tsx等で使われている`--color-correct-500`は生成されるが、`--color-incorrect-500`はコードベースのどこにもリテラルなユーティリティクラスとして使われておらず（インラインstyle内の`var(--color-${tone}-500)`という実行時テンプレートリテラルはTailwindの静的スキャン対象外）、CSS変数自体が生成されず空文字列に解決されていた。
+
+`WeakPoints.tsx`の`Gauge`コンポーネントが既にこの問題を回避する形で実装されていた（SVG + `stroke-correct-600`/`stroke-incorrect-600`等のリテラルなTailwindクラス + `stroke-dasharray`/`stroke-dashoffset`で動的に塗り分ける方式）ため、同じ方式に合わせて実装し直した。静的な（propsに依存しない）グラデーション（水平線バナー・目盛りリング背景）についても、`style`プロパティではなく`bg-[...]`のTailwind任意値記法（クラス名文字列としてリテラルに埋め込む）に寄せることで同様の問題を回避した。**教訓**: このプロジェクトでテーマトークンをCSSカスタムプロパティとして直接参照する場合（`var(--color-*)`）は、必ず同じトークンをどこかでリテラルなTailwindユーティリティクラスとしても使用し、tree-shakingで消えないことを保証する必要がある。
+
+### 28.3 テスト・検証
+
+- `SessionSummary.test.tsx`: 正答率の色分け検証を、テキスト色クラスの検証から`data-testid="accuracy-ring"`要素の`data-tone`属性検証に変更した（視覚的な色分けの実体が弧のみに一本化されたため）。`actions`スロットの有無・`SessionSummaryAction`のリンク先を検証するテストを追加した。
+- GrammarDrill.test.tsx/MixedDrill.test.tsxの既存アサーションは無改修で通過（ボタンのラベル文字列・遷移先自体は変えていないため）。
+- `npm test`（300件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。
+- ブラウザでの実地確認: ログイン画面を経由せずに検証するため、`main.tsx`に一時的な非認証プレビュールート（`/__preview-session-summary`）と専用プレビューコンポーネントを追加し、正答率83%（GrammarDrill想定、良好）/40%（MixedDrill想定、警告色・カテゴリ内訳あり）の2パターンを目視確認した。プレビュー用ルート・コンポーネントは確認後に削除済み（コミット対象外）。
 
 ---
 
