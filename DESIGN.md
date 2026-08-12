@@ -82,6 +82,7 @@
   - テスト: `scripts/content-generation/env.test.ts`（新規6件）追加。`npm test`（289件、283件から+6件）・`npm run lint`（0件）・`npm run typecheck`（0件）・`npm run typecheck:scripts`（0件）全て通過。
 - 2026-08-12: ドリル・SRSの出題ロジックを読み取り調査（実装変更なし）。VocabReviewはFSRSの`due_at`に基づき正解が続くほど出題頻度が下がる一方、GrammarDrill/MixedDrillは過去の正誤を出題選択に一切反映しない完全ランダム抽選であること、同一セッション内での誤答再出題は3画面とも無いこと、24章（当時の番号）の未決事項「出題順ロジック」の記載はstaleではなく現状のランダム実装を正確に表していることを確認した。DESIGN.mdとコードの間に矛盾は見つからなかった。
 - 2026-08-12: Home画面をclaude.ai Design Canvasの1c案「ロッカースイッチ盤」に基づいてリデザインした（24章）。`src/routes/Home.tsx`を全面書き換え、既存の計器盤デザイントークン（`index.css`）にマッピングして実装。既存`Home.test.tsx`は無改修のまま全件通過。`npm test`（289件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。使い捨てテストユーザー（ローカルSupabase）でブラウザ実地確認済み、検証用スクリプト・テストユーザーは作業後に削除（コミット対象外）。旧「未決事項」章を24→27に繰り下げ。
+- 2026-08-12: 旧`service_role`キー失効前の最終確認を実施（23.5追記、DB・`.env`・キー自体の変更は無し）。`.env`のクラウド統一状態を再確認（URL/キーとも一致）。`.env`クラウド統一（23.6・commit `8394feb`）後に`createSupabaseAdminClient`/`ask-tutor`の再確認が未実施だったため、一時検証スクリプト（作業後削除）で実施——オーバーライド無しの実際の`.env`のもとで`generation_batch_items=500`・`generation_batches=33`（初回確認と一致）、`ask-tutor`はHTTP 200で成功。**その過程でSupabase公式ドキュメント・GitHub issue `supabase/supabase#37648`を調査し、Edge Functionsの予約環境変数`SUPABASE_SERVICE_ROLE_KEY`はレガシーキー専用で新`sb_secret_`キーには自動更新されず、レガシーキーを無効化するとこの変数に依存するEdge Functionが動作しなくなるという実例報告を確認した**。`ask-tutor/index.ts`はこの予約変数を直接参照しているため、`.env`側の移行（23.6）とは無関係に旧キー失効の影響を受ける。**結論: 旧キーの失効は現時点で非推奨**。安全に失効させるには`ask-tutor/index.ts`の新キー対応実装・再デプロイ・再確認が別途必要（ユーザーの確認を要する変更のため未着手）。
 
 ## 1. 要件概要
 
@@ -1059,6 +1060,16 @@ Supabase公式ドキュメント（`supabase.com/docs/guides/api/api-keys`）を
 使い捨てテストユーザー（`xxx@mailinator.com`、Admin API作成）で認証込みの実機確認を実施。実際にサインインしてJWTを取得し、`ask-tutor`を呼び出したところHTTP 200・正常な回答が返り、Edge Function内部の`increment_tutor_usage`RPC（service_roleクライアント経由）も正しく実行されたことを`tutor_usage`テーブルの実データ（`request_count: 1`）で確認した。確認後、Admin APIでテストユーザーを削除し、`tutor_usage`行がcascade削除されたことも確認済み（22.5と同じ手順）。
 
 **⚠️ ただし完全な断定はできない残存条件**: この確認は**旧`service_role`キーがまだ失効していない状態**で実施した。Edge Functionの`Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')`（プラットフォーム予約変数）が「新キー体系に完全移行した後」も同じ変数名・同じ意味で提供され続けるかは、公式ドキュメントからは断定できておらず、今回の確認だけでは「新キーが実際に使われている」のか「旧キーがまだ有効なため裏でそちらが使われている」のかを区別できていない。**旧キーを失効させる前に、この点についてもう一度（Edge Function呼び出しが失敗しないことを）確認することを強く推奨する**——23.3の手順6（旧キー失効）の直前に、本節と同じ確認を再実施する。
+
+**🔴 2026-08-12追記: 上記の残存条件を裏付ける具体的なリスクが判明（旧キー失効は非推奨）**
+
+旧キー失効直前の最終確認として、`.env`のクラウド統一（23.6）後の状態（オーバーライド無し・実際の`.env`そのまま）で`createSupabaseAdminClient`相当の確認（`generation_batch_items=500`・`generation_batches=33`、23.5の初回確認と同じ値で一致）と`ask-tutor`のE2E確認（HTTP 200・`increment_tutor_usage`RPC成功）を再実施し、いずれも成功した。しかし、この結果を評価する過程でSupabase公式ドキュメント・GitHubのissueを調査したところ、以下が判明した。
+
+- Edge Functionsに自動注入される予約環境変数（`SUPABASE_URL`/`SUPABASE_ANON_KEY`/`SUPABASE_SERVICE_ROLE_KEY`）は「レガシー」変数として、新キー体系（`sb_publishable_`/`sb_secret_`）移行後も**別名の新変数**（`SUPABASE_PUBLISHABLE_KEYS`/`SUPABASE_SECRET_KEYS`）が追加される形であり、既存の予約変数自体が新キーの値に置き換わるわけではないとSupabase公式ドキュメントに明記されている。
+- GitHub issue [supabase/supabase#37648](https://github.com/supabase/supabase/issues/37648)（`SUPABASE_ANON_KEY`が対象、同じ仕組みが`SERVICE_ROLE_KEY`にも当てはまる可能性が高い）では、レガシーキーを無効化した後もEdge Functions内の予約変数が旧JWT形式の値のまま更新されず、結果としてEdge Functionが「Legacy API keys are disabled」エラーで失敗するという実例が報告されている（2026-08-12時点、未解決・トリアージ待ち）。
+- `supabase/functions/ask-tutor/index.ts`は`Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')`（レガシー予約変数）を直接参照しており、この経路は**プロジェクトルートの`.env`とは完全に独立**している（23.6のクラウド統一・sb_secret_移行は`scripts/content-generation`配下のNode CLIのみが対象で、Edge Functionsのランタイムには一切影響しない）。
+
+**結論**: 今回の確認が成功したことは、旧キーがまだ有効な間は何も壊れていないことの確認にしかならず、**旧キーを失効させた場合に`ask-tutor`が動作し続けるかどうかを検証できていない**という23.5冒頭の懸念は、推測ではなく具体的な裏付け（公式ドキュメントの記載・同一メカニズムでの実例報告）のある実害リスクだと判明した。**現時点では旧キーを失効させるべきではない**。安全に失効させるには、`ask-tutor/index.ts`を新キー体系に対応させる実装変更（例: リクエストの`apikey`ヘッダーから値を取得する、またはSupabaseが提供する新しい予約変数名に切り替える）と再デプロイ、その上での再確認が必要——これは`supabase/functions/`の変更・再デプロイを伴うため、着手前にユーザーの確認を要する。
 
 **🔴 発見した問題（想定外）**: ローカル`.env`の`SUPABASE_URL`は`http://127.0.0.1:54321`（ローカルSupabase）を指したままだが、`SUPABASE_SERVICE_ROLE_KEY`はクラウドプロジェクト向けに新規発行された`sb_secret_`キーに置き換わっていた。この**URLとキーの対応不一致**を実際に検証したところ、ローカルSupabaseは見知らぬクラウドキーを**エラーにせず黙って空集合を返す**（`generation_batch_items`が0件、`grammar_categories`のサンプルも空配列）という挙動を確認した——これは`npm run backfill:auto -- --dry-run`のような読み取り専用コマンドが「閾値未満のカテゴリ/タグはありません」という**誤った（実際にはカテゴリ一覧そのものが空で判定できていないだけの）安全そうに見える結果**を返してしまうという、地味だが実害のある落とし穴だった。
 
