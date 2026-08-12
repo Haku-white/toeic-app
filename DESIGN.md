@@ -86,6 +86,7 @@
 - 2026-08-12: `ask-tutor/index.ts`を予約変数`SUPABASE_SERVICE_ROLE_KEY`依存から非予約名のカスタムシークレット`SB_SECRET_KEY`依存に変更し、クラウドへ再デプロイした（23.7、ユーザーの明示的な承認を得て実施）。当初提案していた「リクエストの`apikey`ヘッダーから鍵を取得する」方式は、フロントエンドが送る`apikey`がanon/publishableキーであり、`increment_tutor_usage`RPC（service_role専用にEXECUTE権限をREVOKE済み）の呼び出しが壊れることが実装前の調査で判明したため採用せず、ユーザーに確認の上で非予約名カスタムシークレット方式に変更した。`supabase secrets set`で`SB_SECRET_KEY`（新`sb_secret_`キーの値）を新規登録→`supabase functions deploy ask-tutor`で再デプロイ→使い捨てテストユーザーによるE2E確認（HTTP 200・`tutor_usage.request_count`が意図通り`1`に増加）まで実施し成功。ローカル開発用`supabase/functions/.env.example`・`.env`（gitignore対象）も同様に更新。**この変更により`ask-tutor`は旧キーに一切依存しなくなり、`scripts/content-generation`（23.6で移行済み）と合わせて、旧`service_role`キーを失効させても問題ないと判断した**（失効操作自体はユーザーがSupabaseダッシュボードで実施）。
 - 2026-08-12: ドリル結果サマリー画面（`SessionSummary`）をclaude.ai Design Canvas「TOEIC-app ホーム画面リデザイン」プロジェクトの2a案「計器編隊型」に基づいてリデザインした（28章、新設）。`src/components/SessionSummary.tsx`を全面書き換え、GrammarDrill.tsx/MixedDrill.tsxの完了画面ボタンを新設`actions`スロット/`SessionSummaryAction`に移行。実装過程でTailwind v4のテーマトークンCSS変数tree-shaking（ソース中にリテラルなユーティリティクラスとして使われていないトークンは`var(--color-*)`参照が空文字列になる）に起因する不具合を発見し、`WeakPoints.tsx`の`Gauge`と同じSVG `stroke-dasharray`方式に作り直して解消した。`npm test`（300件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。一時的な非認証プレビュールートでブラウザ実地確認済み（確認後に削除、コミット対象外）。
 - 2026-08-12: Home画面のヘッダーを、同Design Canvasの5a案「夜間飛行型」に基づいて改修した（24.4追記）。1cの構成（四隅のネジ・`CONTROL PANEL`ヘッダー・ロッカースイッチ行・ログアウト）は維持し、最上部の「ログイン成功」表示のみ、夜の地球を見下ろす暗色バナー（地球のリム光・街の光・上昇する破線トレース+航空機マーカー）に差し替えた。実装中にTailwind v4の`rotate-*`任意値記法の落とし穴（符号はブラケット内部`rotate-[-24deg]`に置く必要があり、`-rotate-[24deg]`は無効なクラスとして静かに無視される。またv4の`rotate`は`transform`ではなくCSS標準の独立した`rotate`プロパティとして出力される）を発見・記録した。`npm test`（300件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。一時的な非認証プレビュールートでブラウザ実地確認済み（確認後に削除、コミット対象外）。
+- 2026-08-12: 文法カテゴリ画面（`src/routes/GrammarCategories.tsx`）を、同Design Canvasの6a案「夜景バナー全面化+2列」に基づいてリデザインした（29章、新設）。1c/5aの計器盤モチーフを継続しつつ、パネル全体を夜景（消失点から伸びる遠近グリッド+街明かり）の暗色背景にし、9カテゴリを2列（最後の1件のみ全幅）で密度高く配置。各カテゴリ行に正答率の進捗バーを追加したため、`getGrammarCategoryStats`（`weakPoints.ts`、既存関数を再利用）を新たに呼び出すようになり、ルートに`loader: requireSession`が既にあった前提を活かして`useLoaderData`でuserIdを取得する構成に変更した。`user_grammar_category_stats`ビューは未挑戦カテゴリの行を返さないため、`getGrammarCategories`の全件とマージし、未挑戦カテゴリは0%ではなく「—」表示にして「挑戦して0点だった」と誤解されないようにした。**ユーザー指定の配色調整**: デザイン原案の各カテゴリ行の紫色ランプ（`oklch(60% .14 300)`）は、ユーザーの指示により薄い黄色（`oklch(85% .14 95)`）に変更した。`GrammarCategories.test.tsx`にloaderと`getGrammarCategoryStats`モックを追加（既存3件は無改修で通過、正答率あり/未挑戦の2ケースを新規追加）。`npm test`（302件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。ローカルSupabaseに使い捨てテストユーザーを作成し、未挑戦（—表示）・1カテゴリ挑戦後（33%表示・進捗バー点灯）の両状態をブラウザで実地確認済み。検証用スクリプト・テストユーザーは作業後に削除（コミット対象外）。
 
 ## 1. 要件概要
 
@@ -1171,6 +1172,26 @@ GrammarDrill/MixedDrillの「セッション完了」画面に、正答率・出
 - GrammarDrill.test.tsx/MixedDrill.test.tsxの既存アサーションは無改修で通過（ボタンのラベル文字列・遷移先自体は変えていないため）。
 - `npm test`（300件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。
 - ブラウザでの実地確認: ログイン画面を経由せずに検証するため、`main.tsx`に一時的な非認証プレビュールート（`/__preview-session-summary`）と専用プレビューコンポーネントを追加し、正答率83%（GrammarDrill想定、良好）/40%（MixedDrill想定、警告色・カテゴリ内訳あり）の2パターンを目視確認した。プレビュー用ルート・コンポーネントは確認後に削除済み（コミット対象外）。
+
+---
+
+## 29. 文法カテゴリ画面（`GrammarCategories`）のDesign Canvas「6a 夜景バナー全面化+2列」への刷新
+
+claude.ai Design Canvas「TOEIC-app ホーム画面リデザイン」プロジェクトの6ターン目（1c/5aの計器盤モチーフを継続し、パネル全体を「夜の街を見下ろして飛ぶ」情景の暗色背景にした案）から、ユーザーが選定した6a案に基づいて`src/routes/GrammarCategories.tsx`をリデザインした。
+
+### 29.1 実装方針
+
+- パネル全体を、消失点(190,32)から街並みへ伸びる遠近グリッド+17個の街明かり（SVG）を背景にした暗色グラデーション（`oklch(12% .02 300)`〜`oklch(19% .035 300)`）にし、「文法カテゴリ」の見出しをこの上に白系の色で重ねた。1c/5aと同じ四隅のネジ・ヘアライン加工のヘッダー（`GRAMMAR CATEGORIES`）は踏襲しつつ、ヘッダー自体もダークパネルに埋め込む発光プレート風の配色に作り直した。
+- 9カテゴリを`grid-cols-2`の2列で密度高く配置し、9件目（品詞、奇数件目の最後）のみ`col-span-2`で全幅にする——`isLastOdd = index === categories.length - 1 && categories.length % 2 === 1`という一般化した条件で実装したため、カテゴリ数が将来変わっても偶数/奇数どちらでも破綻しない。
+- **正答率の追加**: 6a案では各カテゴリ行に進捗バー+正答率%が表示されている。これは元の`GrammarCategories.tsx`には無かったデータで、`WeakPoints.tsx`が既に使っている`getGrammarCategoryStats`（`weakPoints.ts`、新規関数は作らず再利用）を呼び出して実現した。この関数の呼び出しにはuserIdが必要なため、ルートに既にあった`loader: requireSession`（元のコンポーネントは`useLoaderData`を呼んでおらず未使用のまま生えていた）を初めて活用する形にコンポーネントを変更した。
+- `user_grammar_category_stats`ビュー（`getGrammarCategoryStats`が参照する集計ビュー、5章・6.5）は、ユーザーが一度も解答していないカテゴリの行を返さない（`WeakPoints.tsx`の実装から既に判明していた挙動）。そのため`getGrammarCategories`（全9カテゴリ、常に全件）と`getGrammarCategoryStats`（挑戦済みのみ）をcategoryIdでマージし、未挑戦カテゴリは`totalAttempts: 0`として扱う。表示上は0%（＝「挑戦して0点だった」という誤解を招く）ではなく「—」プレースホルダーにし、進捗バー自体も塗らない。
+- **ユーザー指定の配色調整**: デザイン原案で各カテゴリ行の先頭にある発光ドットは紫（`oklch(60% .14 300)`、他の計器盤要素と同じhue 300）だったが、ユーザーの指示により薄い黄色（`oklch(85% .14 95)`）に変更した。既存の意味的トークン（accent/correct/incorrect）とは無関係な純粋装飾要素のため、新規トークンは追加せずリテラル値のまま埋め込んだ。
+
+### 29.2 テスト・検証
+
+- `GrammarCategories.test.tsx`: 既存3件（一覧表示・エラー時・ショートカットキー）はloaderと`getGrammarCategoryStats`モック（既定で空配列を返す）を追加した上で無改修のまま通過。正答率あり（90%表示）・未挑戦（「—」表示、%記号を含まないことを明示的に検証）の2ケースを新規追加した。
+- `npm test`（302件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。
+- ブラウザでの実地確認: ローカルSupabaseに使い捨てテストユーザーを作成し、(a)全カテゴリ未挑戦の状態（進捗バー空・「—」表示）、(b)「時制」カテゴリを実際に3問解答した後の状態（33%表示・進捗バー点灯、他カテゴリは引き続き「—」）の両方を目視確認した。黄色ドットへの配色変更も反映されていることを確認。検証用スクリプト（使い捨てユーザーの作成・削除）・テストユーザー自体は作業後に削除済み（コミット対象外）。
 
 ---
 
