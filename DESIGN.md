@@ -69,6 +69,12 @@
 - 2026-08-12: Supabase APIキー新方式（`sb_secret_`）への移行準備調査を実施（23章）。**コード変更・`.env`変更・新キー発行は一切無し、DESIGN.mdへの記録のみ**。
   - service_roleキーの参照箇所を全て洗い出し（`env.ts`/`supabaseAdmin.ts`/`ask-tutor`Edge Function/テストのモック文字列）、Supabase公式ドキュメントを確認した上で、新旧キーが同一のHTTPヘッダ経由で使われる設計のため、コード側の変更は想定より小さい（`.env`の値を差し替えるだけで変数名変更は不要）と判断した。
   - 移行手順案（23.3、新キー発行→ローカル動作確認→Edge Function実機確認→旧キー失効）とユーザー側作業（23.4）を記録。Edge Function内部の予約変数の扱い・SDKバージョン対応の2点は公式ドキュメントから完全には断定できず、未確認事項として23.5に明記した。
+- 2026-08-12: 上記の`sb_secret_`移行の動作確認を実施（23.5更新）。ユーザーがSupabaseダッシュボードで新キーを発行し、ローカル`.env`の`SUPABASE_SERVICE_ROLE_KEY`を新キーに書き換え済みの状態を対象に検証した（**旧キーはまだ失効させていない、`.env`のこれ以上の書き換えも行っていない**）。
+  - **`createSupabaseAdminClient()`**: 一時検証スクリプト（確認後に削除、コミットせず）でクラウドDB（`qpfmssdhbtlbudqburki`）のRLS deny-allテーブル（`generation_batch_items`=500件・`generation_batches`=33件）に対する実データ取得に成功し、新キーが引き続きservice_role権限（RLSバイパス）を持つことを直接証明した。`@supabase/supabase-js@^2.112.2`の新方式キー対応も確認できた。
+  - **`ask-tutor` Edge Function**: 使い捨てテストユーザー（Admin API作成・確認後削除、22.5と同じ手順）で認証込みのエンドツーエンド確認を実施。HTTP 200・正常な回答、`tutor_usage`への行作成（service_role経由のRPC呼び出し成功）を確認した。ただしこの確認は**旧キーがまだ有効な状態**で行っているため、「新キーが使われている」のか「旧キーが裏で使われ続けている」のかを完全には区別できていない——旧キー失効の直前に同じ確認を再実施することを23.5に推奨事項として明記した。
+  - **想定外の発見**: ローカル`.env`の`SUPABASE_URL`（`http://127.0.0.1:54321`）と、クラウド向けに新規発行された`SUPABASE_SERVICE_ROLE_KEY`の組み合わせが不一致になっており、ローカルSupabaseがこれをエラーにせず黙って空集合を返すことを確認した。`npm run backfill:auto -- --dry-run`等、`scripts/content-generation/`配下のCLIをこのままローカル向けに実行すると、気づかれないまま不正確な結果（例:「閾値未満のカテゴリ/タグはありません」という誤った安全宣言）を返すリスクがある。対応方針の選択肢を23.5に記録し、ユーザーの判断待ちとした。
+  - テスト: `npm test`（283件、既存のモック文字列は実キーの影響を受けないことを確認、リグレッション無し）。`npm run lint`・`npm run typecheck`・`npm run typecheck:scripts`は今回コード変更が無いため未実施（DESIGN.mdのみの変更）。
+  - **旧キーの失効はまだ行っていない**（ユーザーの明示的な指示を待つ、23.4参照）。
 
 ## 1. 要件概要
 
@@ -1033,10 +1039,22 @@ Supabase公式ドキュメント（`supabase.com/docs/guides/api/api-keys`）を
 - **動作確認が取れた後**: 旧`service_role`キーの失効はユーザー側で実施（不可逆操作のため、私からは提案するのみで実行はしない）。
 - クラウドSupabaseプロジェクト側で新方式キーへの切り替えに伴う追加設定（Edge Functionsの`--no-verify-jwt`要否等、23.2の3参照）が必要になった場合は、実機確認の結果を見てあらためて相談する。
 
-### 23.5 未確認・要検証の不確定要素
+### 23.5 実機確認の結果（2026-08-12実施、更新履歴も参照）
 
-- Edge Function内部の`Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')`（プラットフォーム予約変数）が、プロジェクトが新キー体系に移行した後も同じ変数名・同じ意味で提供され続けるか、公式ドキュメントから完全には断定できなかった（23.2の3参照）。
-- `@supabase/supabase-js@^2.112.2`が新方式キーに正式対応しているかの明示的なバージョン記載は見つけられなかった（23.2の4参照）。実機確認（23.3のステップ3）で problems が出れば、パッケージの更新が必要になる可能性がある。
+ユーザーが`sb_secret_...`形式の新キーをSupabaseダッシュボードで発行し、ローカル`.env`の`SUPABASE_SERVICE_ROLE_KEY`をその値に書き換え済みの状態で、以下を実際に確認した（旧`service_role`キーはこの時点でまだ失効させていない、共存状態）。
+
+**✅ `createSupabaseAdminClient()`（`env.ts`/`supabaseAdmin.ts`）— 新キーで正常動作を確認**
+
+一時検証スクリプト（コミットせず確認後に削除）で、`generation_batch_items`・`generation_batches`（いずれもRLS有効・ポリシー無しのdeny-allテーブル、service_role以外は0件しか返らない）に対してカウントクエリを実行。クラウドDB（`qpfmssdhbtlbudqburki`）に対して`generation_batch_items`=500件・`generation_batches`=33件と実データが返ることを確認し、**新キーが引き続きservice_role権限（RLSバイパス）を正しく持つことを直接証明した**。`@supabase/supabase-js@^2.112.2`は新方式キーに問題無く対応していることも同時に確認できた（23.2の4の不確定要素は解消）。
+
+**✅ `ask-tutor` Edge Function — 新キー環境下でエンドツーエンド動作を確認**
+
+使い捨てテストユーザー（`xxx@mailinator.com`、Admin API作成）で認証込みの実機確認を実施。実際にサインインしてJWTを取得し、`ask-tutor`を呼び出したところHTTP 200・正常な回答が返り、Edge Function内部の`increment_tutor_usage`RPC（service_roleクライアント経由）も正しく実行されたことを`tutor_usage`テーブルの実データ（`request_count: 1`）で確認した。確認後、Admin APIでテストユーザーを削除し、`tutor_usage`行がcascade削除されたことも確認済み（22.5と同じ手順）。
+
+**⚠️ ただし完全な断定はできない残存条件**: この確認は**旧`service_role`キーがまだ失効していない状態**で実施した。Edge Functionの`Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')`（プラットフォーム予約変数）が「新キー体系に完全移行した後」も同じ変数名・同じ意味で提供され続けるかは、公式ドキュメントからは断定できておらず、今回の確認だけでは「新キーが実際に使われている」のか「旧キーがまだ有効なため裏でそちらが使われている」のかを区別できていない。**旧キーを失効させる前に、この点についてもう一度（Edge Function呼び出しが失敗しないことを）確認することを強く推奨する**——23.3の手順6（旧キー失効）の直前に、本節と同じ確認を再実施する。
+
+**🔴 新たに発見した問題（想定外・要対応）**: ローカル`.env`の`SUPABASE_URL`は`http://127.0.0.1:54321`（ローカルSupabase）を指したままだが、`SUPABASE_SERVICE_ROLE_KEY`はクラウドプロジェクト向けに新規発行された`sb_secret_`キーに置き換わっている。この**URLとキーの対応不一致**を実際に検証したところ、ローカルSupabaseは見知らぬクラウドキーを**エラーにせず黙って空集合を返す**（`generation_categories`が0件、`grammar_categories`のサンプルも空配列）という挙動を確認した——これは`npm run backfill:auto -- --dry-run`のような読み取り専用コマンドが「閾値未満のカテゴリ/タグはありません」という**誤った（実際にはカテゴリ一覧そのものが空で判定できていないだけの）安全そうに見える結果**を返してしまうという、地味だが実害のある落とし穴である。ローカル開発中に`scripts/content-generation/`配下のCLIを実行すると、意図せずこの状態で動いてしまう。
+- **対応方針の提案**（実施はしていない、判断待ち）: (a) ローカル開発時は引き続きローカルSupabaseの専用demo鍵（`supabase status`で確認できる、プロジェクトのdemo固定値）を使い、クラウド向け作業のときだけ`.env`を一時的にcrowdキー+クラウドURLへ切り替える運用にする、(b) 用途別に`.env`ファイルを分ける（例: `.env`はローカル専用に戻し、クラウド向けスクリプト実行時は`SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY`をコマンド実行時に環境変数で上書きする）、(c) 今後`.env`の`SUPABASE_URL`は常にクラウドを指す運用に統一する——のいずれかを選ぶ必要がある。現状（ローカルURL＋クラウドキー）のままでは**ローカル開発用のCLI実行が気づかれないまま不正確な結果を返し続けるリスクがある**ため、次に`scripts/content-generation/`配下のCLIをローカル向けに実行する前に、方針を決めておくことを推奨する。
 
 ---
 
