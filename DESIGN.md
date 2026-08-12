@@ -75,6 +75,11 @@
   - **想定外の発見**: ローカル`.env`の`SUPABASE_URL`（`http://127.0.0.1:54321`）と、クラウド向けに新規発行された`SUPABASE_SERVICE_ROLE_KEY`の組み合わせが不一致になっており、ローカルSupabaseがこれをエラーにせず黙って空集合を返すことを確認した。`npm run backfill:auto -- --dry-run`等、`scripts/content-generation/`配下のCLIをこのままローカル向けに実行すると、気づかれないまま不正確な結果（例:「閾値未満のカテゴリ/タグはありません」という誤った安全宣言）を返すリスクがある。対応方針の選択肢を23.5に記録し、ユーザーの判断待ちとした。
   - テスト: `npm test`（283件、既存のモック文字列は実キーの影響を受けないことを確認、リグレッション無し）。`npm run lint`・`npm run typecheck`・`npm run typecheck:scripts`は今回コード変更が無いため未実施（DESIGN.mdのみの変更）。
   - **旧キーの失効はまだ行っていない**（ユーザーの明示的な指示を待つ、23.4参照）。
+- 2026-08-12: 上記の想定外の発見（`.env`のURL/キー不一致）に対応し、`.env`運用を「常にクラウドを指す」方針に統一した（23.6）。
+  - `.env`の`SUPABASE_URL`をクラウドプロジェクトURLに書き換え、`SUPABASE_SERVICE_ROLE_KEY`（既にクラウド向け）と揃えた。
+  - `env.ts`の`loadEnv()`に接続先ログ・警告（`logConnectionTarget`）を追加。既知のクラウドURLと一致すれば通常ログ、ローカル/想定外URLなら`console.warn`で警告する。複数回呼ばれても1回だけ出力する。
+  - ローカルでの動作確認は`.env`を書き換えず、コマンド実行時の一時的な環境変数上書きで行う運用とし、CLAUDE.mdに新設した「`.env`運用ルール」節に明記した（既存の`db reset`前バックアップ規約とも矛盾しないことを確認）。
+  - テスト: `scripts/content-generation/env.test.ts`（新規6件）追加。`npm test`（289件、283件から+6件）・`npm run lint`（0件）・`npm run typecheck`（0件）・`npm run typecheck:scripts`（0件）全て通過。
 
 ## 1. 要件概要
 
@@ -1053,8 +1058,18 @@ Supabase公式ドキュメント（`supabase.com/docs/guides/api/api-keys`）を
 
 **⚠️ ただし完全な断定はできない残存条件**: この確認は**旧`service_role`キーがまだ失効していない状態**で実施した。Edge Functionの`Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')`（プラットフォーム予約変数）が「新キー体系に完全移行した後」も同じ変数名・同じ意味で提供され続けるかは、公式ドキュメントからは断定できておらず、今回の確認だけでは「新キーが実際に使われている」のか「旧キーがまだ有効なため裏でそちらが使われている」のかを区別できていない。**旧キーを失効させる前に、この点についてもう一度（Edge Function呼び出しが失敗しないことを）確認することを強く推奨する**——23.3の手順6（旧キー失効）の直前に、本節と同じ確認を再実施する。
 
-**🔴 新たに発見した問題（想定外・要対応）**: ローカル`.env`の`SUPABASE_URL`は`http://127.0.0.1:54321`（ローカルSupabase）を指したままだが、`SUPABASE_SERVICE_ROLE_KEY`はクラウドプロジェクト向けに新規発行された`sb_secret_`キーに置き換わっている。この**URLとキーの対応不一致**を実際に検証したところ、ローカルSupabaseは見知らぬクラウドキーを**エラーにせず黙って空集合を返す**（`generation_categories`が0件、`grammar_categories`のサンプルも空配列）という挙動を確認した——これは`npm run backfill:auto -- --dry-run`のような読み取り専用コマンドが「閾値未満のカテゴリ/タグはありません」という**誤った（実際にはカテゴリ一覧そのものが空で判定できていないだけの）安全そうに見える結果**を返してしまうという、地味だが実害のある落とし穴である。ローカル開発中に`scripts/content-generation/`配下のCLIを実行すると、意図せずこの状態で動いてしまう。
-- **対応方針の提案**（実施はしていない、判断待ち）: (a) ローカル開発時は引き続きローカルSupabaseの専用demo鍵（`supabase status`で確認できる、プロジェクトのdemo固定値）を使い、クラウド向け作業のときだけ`.env`を一時的にcrowdキー+クラウドURLへ切り替える運用にする、(b) 用途別に`.env`ファイルを分ける（例: `.env`はローカル専用に戻し、クラウド向けスクリプト実行時は`SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY`をコマンド実行時に環境変数で上書きする）、(c) 今後`.env`の`SUPABASE_URL`は常にクラウドを指す運用に統一する——のいずれかを選ぶ必要がある。現状（ローカルURL＋クラウドキー）のままでは**ローカル開発用のCLI実行が気づかれないまま不正確な結果を返し続けるリスクがある**ため、次に`scripts/content-generation/`配下のCLIをローカル向けに実行する前に、方針を決めておくことを推奨する。
+**🔴 発見した問題（想定外）**: ローカル`.env`の`SUPABASE_URL`は`http://127.0.0.1:54321`（ローカルSupabase）を指したままだが、`SUPABASE_SERVICE_ROLE_KEY`はクラウドプロジェクト向けに新規発行された`sb_secret_`キーに置き換わっていた。この**URLとキーの対応不一致**を実際に検証したところ、ローカルSupabaseは見知らぬクラウドキーを**エラーにせず黙って空集合を返す**（`generation_batch_items`が0件、`grammar_categories`のサンプルも空配列）という挙動を確認した——これは`npm run backfill:auto -- --dry-run`のような読み取り専用コマンドが「閾値未満のカテゴリ/タグはありません」という**誤った（実際にはカテゴリ一覧そのものが空で判定できていないだけの）安全そうに見える結果**を返してしまうという、地味だが実害のある落とし穴だった。
+
+### 23.6 上記の問題への対応（2026-08-12、案(c)を採用・実施済み）
+
+23.5で発見した不一致に対し、以下の対応を実施した（案(a)ローカル専用鍵に戻す・案(b)`.env`ファイルを分ける・案(c)常にクラウドを指す運用に統一する、の3案のうち(c)を採用）。
+
+- **`.env`の`SUPABASE_URL`をクラウドプロジェクトのURL（`https://qpfmssdhbtlbudqburki.supabase.co`）に書き換えた**。`SUPABASE_SERVICE_ROLE_KEY`は既にクラウド向けの新キーになっていたため、これで両方がクラウドを指す状態に統一された。
+- **(c)を選んだ理由**: 案(a)・(b)はローカル/クラウドどちらを向いているかが`.env`の見た目からは判断しにくく、今回と同種の「気づかない不一致」を再発させるリスクを構造的に残す。案(c)は「`.env`は常にクラウド」という単純で覚えやすい不変条件にでき、ローカルでの動作確認は例外的な用途として都度の一時上書きで済ませる方が事故を防ぎやすいと判断した（CLAUDE.mdに運用ルールとして明記、下記参照）。
+- **ローカルでの動作確認方法**: `.env`自体は書き換えず、コマンド実行時に環境変数で一時的に上書きする（例: `SUPABASE_URL=http://127.0.0.1:54321 SUPABASE_SERVICE_ROLE_KEY=<npx supabase statusで取得> npx tsx scripts/content-generation/generate_grammar.ts ...`）。dotenvの`config()`は既に`process.env`に設定済みの値を上書きしないため、シェルで先に設定した値がそのまま優先される（本セッションの検証で実際に確認済みの挙動）。ローカルのURL/キーは固定のデモ値だが`.env`にハードコードせず、`npx supabase status`で都度取得する運用とした（値自体を文書に残さないため）。
+- **`scripts/content-generation/env.ts`に接続先ログ・警告を追加した**（`loadEnv()`内、新規`logConnectionTarget()`）: `SUPABASE_URL`が既知のクラウドプロジェクトURLと一致すれば`[env] Supabase接続先: クラウド (...)`と通常ログを出し、`127.0.0.1`/`localhost`ならローカル向けである旨を、それ以外の想定外URLならその旨を、それぞれ`console.warn`で警告する。プロセス内で`loadEnv()`が複数回呼ばれても（`generateGrammarBatch`/`generateVocabBatch`が呼び出しごとに呼ぶため）ログ・警告は1回だけに絞った。**実装の規模は小さく済んだため、当初の懸念（item 2「大掛かりになる場合は見送り可」）には該当せず、そのまま実装した**。
+- **CLAUDE.mdに運用ルールを追記**（新設「`.env`運用ルール」節）: 常にクラウドを指す方針・ローカル動作確認の一時上書き方法・不一致が起きた際の実害（今回の事故）を明記し、既存の`db reset`前バックアップ規約とは矛盾せず両立することも明記した。
+- テスト: `scripts/content-generation/env.test.ts`（新規、6件）で`logConnectionTarget`の3分岐（クラウド一致・ローカル・想定外URL）と「1回だけログする」挙動を検証。`npm test`（289件、283件から+6件）・`npm run lint`（0件）・`npm run typecheck`（0件）・`npm run typecheck:scripts`（0件）全て通過。
 
 ---
 

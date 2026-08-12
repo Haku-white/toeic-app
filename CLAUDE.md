@@ -34,6 +34,13 @@
 - （上記に準ずるものとして）**クラウドSupabaseプロジェクトへのマイグレーション反映・データ変更**も、明示的な指示がない限り行わない。ローカルでの適用と本番（クラウド）への反映は必ず分けて考える
 - **`supabase db reset`（またはローカルDBの内容を作り直す同種の操作）を実行する前には、必ず`npm run db:backup`でバックアップを取ること**（ユーザーへの確認ではなく、都度自動的に行うべき手順）。`db reset`はmigrations+seed.sqlのみを再生するため、コンテンツ生成パイプライン（`commitBatch.ts`）がライブでINSERTした本番反映済みデータ（バックフィル済みの`grammar_questions`/`vocab_words`等）はseed.sqlに含まれない限り失われる。2026-08-12、この手順を怠ったために文法問題320問・語彙タグ拡張分がまるごと消失する事故が発生した（DESIGN.md参照）。バックアップさえ取っていれば`db reset`自体はスキーマ確認目的で自由に実行してよい
 
+## `.env`運用ルール（`scripts/content-generation/`配下のCLI）
+
+- `scripts/content-generation/`配下のCLI（およびその他クラウドDBを操作しうるスクリプト）は、**常にクラウドSupabaseプロジェクト（`qpfmssdhbtlbudqburki`）を指す**運用に統一する（2026-08-12、DESIGN.md 23章参照）。プロジェクトルートの`.env`の`SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY`は常にクラウド向けの値を設定しておく。
+- ローカルSupabase（`supabase start`/`npm run db:start`）は、スキーマ変更の動作確認などクラウドに影響を与えたくない場面**のみ**で使う（上記の`db reset`前バックアップ規約とはこの用途で引き続き両立する）。この`.env`自体は書き換えず、対象コマンドの実行時だけ環境変数で一時的に上書きする（例: `SUPABASE_URL=http://127.0.0.1:54321 SUPABASE_SERVICE_ROLE_KEY=<npx supabase statusで取得> npx tsx scripts/content-generation/generate_grammar.ts ...`）。
+- `scripts/content-generation/env.ts`の`loadEnv()`は、接続先が既知のクラウドプロジェクトURLと一致しない場合（ローカルや想定外のURL）に起動時へ警告ログを出す。この警告が出た状態でクラウドへの反映を意図したコマンドを実行しないこと。
+- 過去に`SUPABASE_URL`だけがローカルのまま取り残され、`SUPABASE_SERVICE_ROLE_KEY`だけクラウド向けに更新されるという不一致が発生し、ローカルSupabaseがエラーを出さず黙って空集合を返す事故につながったことがある（DESIGN.md 23.5参照）。`.env`を触る際はURLとキーが必ず同じ環境（クラウドまたはローカル）を指しているか確認すること。
+
 ## コーディング規約
 
 ### ディレクトリ構成・命名パターン
