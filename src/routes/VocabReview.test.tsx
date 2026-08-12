@@ -45,6 +45,7 @@ const sampleCard: VocabCard = {
   exampleSentenceEn: 'We need to negotiate.',
   exampleSentenceJa: '交渉する必要がある。',
   etymologyNote: 'neg-(否定)+otium(暇)→「暇ではない」',
+  additionalExplanation: '"negotiate"と"negate"(否定する)は綴りが似ているため混同しやすい単語です。',
   progress: null,
 }
 
@@ -75,6 +76,26 @@ describe('VocabReview', () => {
     expect(screen.getByText(sampleCard.etymologyNote!)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /もう一度/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /簡単/ })).toBeInTheDocument()
+  })
+
+  it('shows the "よくある間違いのポイント" box when the card has an additionalExplanation (11章)', async () => {
+    vi.mocked(getDueVocabCards).mockResolvedValue([sampleCard])
+    renderVocabReview()
+
+    fireEvent.click(await screen.findByRole('button', { name: '答えを見る' }))
+
+    expect(await screen.findByText('よくある間違いのポイント')).toBeInTheDocument()
+    expect(screen.getByText(sampleCard.additionalExplanation!)).toBeInTheDocument()
+  })
+
+  it('does not show the "よくある間違いのポイント" box when additionalExplanation is null', async () => {
+    vi.mocked(getDueVocabCards).mockResolvedValue([{ ...sampleCard, additionalExplanation: null }])
+    renderVocabReview()
+
+    fireEvent.click(await screen.findByRole('button', { name: '答えを見る' }))
+
+    expect(await screen.findByText('交渉する')).toBeInTheDocument()
+    expect(screen.queryByText('よくある間違いのポイント')).not.toBeInTheDocument()
   })
 
   it('submits the chosen rating and advances to the session-complete screen', async () => {

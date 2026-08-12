@@ -1,8 +1,15 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { findSimilarGrammarQuestions, findSimilarVocabWords } from './duplicateCheck'
 import { runGrammarSelfCheck } from './selfCheck'
-import { validateGrammarItemStructure, validateVocabItemStructure, wordPosKey } from './structuralValidation'
+import {
+  validateAdditionalExplanationItemStructure,
+  validateGrammarItemStructure,
+  validateVocabItemStructure,
+  wordPosKey,
+} from './structuralValidation'
 import type { generateJson as generateJsonFn } from './gemini'
+
+type ContentType = 'grammar' | 'vocab' | 'grammar_explanation' | 'vocab_explanation'
 
 export interface ValidateBatchDeps {
   supabase: SupabaseClient
@@ -71,6 +78,22 @@ function findInBatchVocabDuplicates(items: BatchItemRow[]): Map<string, string> 
   return duplicates
 }
 
+/** 11.3: 追加解説版。同一バッチ内で同じtarget_idが複数回出力された場合（Gemini側の重複出力）を検出する。 */
+function findInBatchAdditionalExplanationDuplicates(items: BatchItemRow[]): Map<string, string> {
+  const seen = new Set<string>()
+  const duplicates = new Map<string, string>()
+  for (const item of items) {
+    const raw = item.raw_payload as { target_id?: unknown }
+    if (typeof raw?.target_id !== 'string') continue // 構造チェックで別途弾かれる
+    if (seen.has(raw.target_id)) {
+      duplicates.set(item.id, `同一バッチ内の他の項目とtarget_id（${raw.target_id}）が重複しています`)
+    } else {
+      seen.add(raw.target_id)
+    }
+  }
+  return duplicates
+}
+
 async function markItem(
   supabase: SupabaseClient,
   itemId: string,
@@ -106,7 +129,7 @@ export async function validateBatch(batchId: string, deps: ValidateBatchDeps): P
     .eq('id', batchId)
     .single()
   if (batchError) throw batchError
-  const contentType = (batchRow as { content_type: 'grammar' | 'vocab' }).content_type
+  const contentType = (batchRow as { content_type: ContentType }).content_type
 
   const { data: allItemRows, error: itemsError } = await supabase
     .from('generation_batch_items')
@@ -140,7 +163,11 @@ export async function validateBatch(batchId: string, deps: ValidateBatchDeps): P
   // 10.9: バッチ内自己重複チェック。構造チェックより前に判定し、重複と判定された項目は
   // 以降のDB近似重複検出・セルフチェック（Gemini呼び出し）を無駄に行わないようスキップする。
   const inBatchDuplicates =
-    contentType === 'grammar' ? findInBatchGrammarDuplicates(items) : findInBatchVocabDuplicates(items)
+    contentType === 'grammar'
+      ? findInBatchGrammarDuplicates(items)
+      : contentType === 'vocab'
+        ? findInBatchVocabDuplicates(items)
+        : findInBatchAdditionalExplanationDuplicates(items)
 
   let autoPassed = 0
   let needsReview = 0
@@ -188,7 +215,7 @@ export async function validateBatch(batchId: string, deps: ValidateBatchDeps): P
           })
           needsReview += 1
         }
-      } else {
+      } else if (contentType === 'vocab') {
         const structural = validateVocabItemStructure(item.raw_payload, existingVocabPairs!)
         if (!structural.valid) {
           await markItem(supabase, item.id, { status: 'needs_review', validation_errors: structural.errors })
@@ -211,6 +238,45 @@ export async function validateBatch(batchId: string, deps: ValidateBatchDeps): P
         }
 
         // 語彙は選択式問題ではないため一意性セルフチェックの対象外（8.4）
+        await markItem(supabase, item.id, { status: 'auto_passed' })
+        autoPassed += 1
+      } else {
+        // 11.3: grammar_explanation / vocab_explanation（間違いが多い問題への追加解説）。
+        // 客観的に検証可能な判定軸が無いためセルフチェックは行わず、構造チェック＋対象行の
+        // 実在確認・未設定確認のみで auto_passed とする（設計判断の理由は11.3参照）。
+        const structural = validateAdditionalExplanationItemStructure(item.raw_payload)
+        if (!structural.valid) {
+          await markItem(supabase, item.id, { status: 'needs_review', validation_errors: structural.errors })
+          needsReview += 1
+          continue
+        }
+        const parsed = structural.data!
+        const targetTable = contentType === 'grammar_explanation' ? 'grammar_questions' : 'vocab_words'
+
+        const { data: targetRow, error: targetError } = await supabase
+          .from(targetTable)
+          .select('id, additional_explanation')
+          .eq('id', parsed.target_id)
+          .maybeSingle()
+        if (targetError) throw targetError
+
+        if (!targetRow) {
+          await markItem(supabase, item.id, {
+            status: 'needs_review',
+            validation_errors: [`target_id "${parsed.target_id}" は${targetTable}に存在しません`],
+          })
+          needsReview += 1
+          continue
+        }
+        if ((targetRow as { additional_explanation: string | null }).additional_explanation) {
+          await markItem(supabase, item.id, {
+            status: 'needs_review',
+            validation_errors: [`target_id "${parsed.target_id}" には既に追加解説が設定済みです`],
+          })
+          needsReview += 1
+          continue
+        }
+
         await markItem(supabase, item.id, { status: 'auto_passed' })
         autoPassed += 1
       }

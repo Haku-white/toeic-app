@@ -199,6 +199,12 @@ export default function VocabReview() {
                 <p className="mt-1 text-sm text-neutral-700">{currentCard!.etymologyNote}</p>
               </div>
             )}
+            {currentCard!.additionalExplanation && (
+              <div className="rounded border border-incorrect-200 bg-incorrect-50 px-3 py-2">
+                <p className="text-xs font-medium text-incorrect-700">よくある間違いのポイント</p>
+                <p className="mt-1 text-sm text-neutral-700">{currentCard!.additionalExplanation}</p>
+              </div>
+            )}
 
             <AskTutorPanel
               questionText={`${currentCard!.word}: ${currentCard!.exampleSentenceEn}`}

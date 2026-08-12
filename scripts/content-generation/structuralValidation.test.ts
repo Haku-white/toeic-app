@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { validateGrammarItemStructure, validateVocabItemStructure, wordPosKey } from './structuralValidation'
+import {
+  validateAdditionalExplanationItemStructure,
+  validateGrammarItemStructure,
+  validateVocabItemStructure,
+  wordPosKey,
+} from './structuralValidation'
 
 const validGrammarItem = {
   question_text: 'The company ___ its report by Friday.',
@@ -72,6 +77,30 @@ describe('validateVocabItemStructure', () => {
   it('fails Zod validation when etymology_note is missing', () => {
     const { etymology_note: _omit, ...withoutEtymology } = validVocabItem
     const result = validateVocabItemStructure(withoutEtymology, new Set())
+    expect(result.valid).toBe(false)
+  })
+})
+
+describe('validateAdditionalExplanationItemStructure (11.3)', () => {
+  const validItem = {
+    target_id: '123e4567-e89b-12d3-a456-426614174000',
+    additional_explanation: 'よくある間違いの補足。',
+  }
+
+  it('passes a well-formed item', () => {
+    const result = validateAdditionalExplanationItemStructure(validItem)
+    expect(result.valid).toBe(true)
+    expect(result.data?.target_id).toBe(validItem.target_id)
+  })
+
+  it('fails when target_id is not a UUID', () => {
+    const result = validateAdditionalExplanationItemStructure({ ...validItem, target_id: 'not-a-uuid' })
+    expect(result.valid).toBe(false)
+    expect(result.errors[0]).toContain('target_id')
+  })
+
+  it('fails when additional_explanation is empty', () => {
+    const result = validateAdditionalExplanationItemStructure({ ...validItem, additional_explanation: '' })
     expect(result.valid).toBe(false)
   })
 })

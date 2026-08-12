@@ -322,3 +322,130 @@ describe('validateBatch (vocab)', () => {
     expect(rpcMock).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('validateBatch (grammar_explanation / vocab_explanation, 11.3)', () => {
+  const Q1_ID = '123e4567-e89b-12d3-a456-426614174000'
+  const Q_MISSING_ID = '00000000-0000-0000-0000-000000000000'
+  const V1_ID = '223e4567-e89b-12d3-a456-426614174001'
+
+  function buildExplanationSupabase(
+    contentType: 'grammar_explanation' | 'vocab_explanation',
+    itemRows: { id: string; raw_payload: unknown; status: string }[],
+    targetTable: string,
+    targetRowsById: Record<string, unknown>,
+  ) {
+    const itemUpdates: Array<{ id: string; fields: Record<string, unknown> }> = []
+    const from = vi.fn((table: string) => {
+      if (table === 'generation_batches') {
+        const builder = makeQueryBuilder({ data: { content_type: contentType }, error: null })
+        builder.update = vi.fn(() => builder)
+        return builder
+      }
+      if (table === 'generation_batch_items') {
+        const builder = makeQueryBuilder({ data: itemRows, error: null })
+        builder.update = vi.fn((fields: Record<string, unknown>) => {
+          const chained = { ...builder }
+          chained.eq = vi.fn((_col: string, id: string) => {
+            itemUpdates.push({ id, fields })
+            return Promise.resolve({ data: null, error: null })
+          })
+          return chained
+        })
+        return builder
+      }
+      if (table === targetTable) {
+        const builder: Record<string, unknown> = {}
+        builder.select = vi.fn(() => builder)
+        builder.eq = vi.fn((_col: string, id: string) => builder2ForId(id))
+        function builder2ForId(id: string) {
+          const inner: Record<string, unknown> = {}
+          inner.maybeSingle = vi.fn(() =>
+            Promise.resolve({ data: targetRowsById[id] ?? null, error: null }),
+          )
+          return inner
+        }
+        return builder
+      }
+      throw new Error(`unexpected table: ${table}`)
+    })
+    const supabase = { from, rpc: vi.fn() } as unknown as Parameters<typeof validateBatch>[1]['supabase']
+    return { supabase, itemUpdates }
+  }
+
+  it('auto-passes a well-formed grammar_explanation item whose target exists and has no additional_explanation yet', async () => {
+    const { supabase, itemUpdates } = buildExplanationSupabase(
+      'grammar_explanation',
+      [{ id: 'item-1', raw_payload: { target_id: Q1_ID, additional_explanation: '補足' }, status: 'pending_validation' }],
+      'grammar_questions',
+      { [Q1_ID]: { id: Q1_ID, additional_explanation: null } },
+    )
+    const generateJson = vi.fn()
+
+    const result = await validateBatch('batch-1', { supabase, generateJson })
+
+    expect(result).toEqual({ total: 1, autoPassed: 1, needsReview: 0, totalItemsInBatch: 1 })
+    expect(itemUpdates[0].fields.status).toBe('auto_passed')
+    expect(generateJson).not.toHaveBeenCalled() // 11.3: セルフチェックは行わない
+  })
+
+  it('marks a grammar_explanation item needs_review when the target_id does not exist', async () => {
+    const { supabase, itemUpdates } = buildExplanationSupabase(
+      'grammar_explanation',
+      [{ id: 'item-1', raw_payload: { target_id: Q_MISSING_ID, additional_explanation: '補足' }, status: 'pending_validation' }],
+      'grammar_questions',
+      {},
+    )
+
+    const result = await validateBatch('batch-1', { supabase, generateJson: vi.fn() })
+
+    expect(result).toEqual({ total: 1, autoPassed: 0, needsReview: 1, totalItemsInBatch: 1 })
+    expect((itemUpdates[0].fields.validation_errors as string[])[0]).toContain('存在しません')
+  })
+
+  it('marks a grammar_explanation item needs_review when the target already has an additional_explanation', async () => {
+    const { supabase, itemUpdates } = buildExplanationSupabase(
+      'grammar_explanation',
+      [{ id: 'item-1', raw_payload: { target_id: Q1_ID, additional_explanation: '補足' }, status: 'pending_validation' }],
+      'grammar_questions',
+      { [Q1_ID]: { id: Q1_ID, additional_explanation: '既存の補足解説' } },
+    )
+
+    const result = await validateBatch('batch-1', { supabase, generateJson: vi.fn() })
+
+    expect(result).toEqual({ total: 1, autoPassed: 0, needsReview: 1, totalItemsInBatch: 1 })
+    expect((itemUpdates[0].fields.validation_errors as string[])[0]).toContain('既に追加解説が設定済み')
+  })
+
+  it('flags an in-batch duplicate target_id (11.3/10.9) without querying the target table for it', async () => {
+    const { supabase, itemUpdates } = buildExplanationSupabase(
+      'vocab_explanation',
+      [
+        { id: 'item-1', raw_payload: { target_id: V1_ID, additional_explanation: '補足A' }, status: 'pending_validation' },
+        { id: 'item-2', raw_payload: { target_id: V1_ID, additional_explanation: '補足B' }, status: 'pending_validation' },
+      ],
+      'vocab_words',
+      { [V1_ID]: { id: V1_ID, additional_explanation: null } },
+    )
+
+    const result = await validateBatch('batch-1', { supabase, generateJson: vi.fn() })
+
+    expect(result).toEqual({ total: 2, autoPassed: 1, needsReview: 1, totalItemsInBatch: 2 })
+    expect(itemUpdates[0].fields.status).toBe('auto_passed')
+    expect(itemUpdates[1].fields.status).toBe('needs_review')
+    expect((itemUpdates[1].fields.validation_errors as string[])[0]).toContain('target_id')
+  })
+
+  it('marks a structurally invalid explanation item (bad target_id format) as needs_review', async () => {
+    const { supabase, itemUpdates } = buildExplanationSupabase(
+      'grammar_explanation',
+      [{ id: 'item-1', raw_payload: { target_id: 'not-a-uuid', additional_explanation: '補足' }, status: 'pending_validation' }],
+      'grammar_questions',
+      {},
+    )
+
+    const result = await validateBatch('batch-1', { supabase, generateJson: vi.fn() })
+
+    expect(result).toEqual({ total: 1, autoPassed: 0, needsReview: 1, totalItemsInBatch: 1 })
+    expect((itemUpdates[0].fields.validation_errors as string[])[0]).toContain('target_id')
+  })
+})

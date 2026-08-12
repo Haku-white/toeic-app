@@ -1,4 +1,11 @@
-import { grammarItemSchema, vocabItemSchema, type GrammarItem, type VocabItem } from './schemas'
+import {
+  additionalExplanationItemSchema,
+  grammarItemSchema,
+  vocabItemSchema,
+  type AdditionalExplanationItem,
+  type GrammarItem,
+  type VocabItem,
+} from './schemas'
 
 export interface StructuralValidationResult<T> {
   valid: boolean
@@ -46,4 +53,18 @@ export function validateVocabItemStructure(
 
 export function wordPosKey(word: string, partOfSpeech: string | null): string {
   return `${word}|${partOfSpeech ?? ''}`
+}
+
+/**
+ * 11.3 追加解説の構造チェック: Zodスキーマのみ（`target_id`の実在確認・未設定確認は
+ * DBアクセスを伴うため`validateBatch.ts`側で行う）。
+ */
+export function validateAdditionalExplanationItemStructure(
+  raw: unknown,
+): StructuralValidationResult<AdditionalExplanationItem> {
+  const parsed = additionalExplanationItemSchema.safeParse(raw)
+  if (!parsed.success) {
+    return { valid: false, errors: parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`) }
+  }
+  return { valid: true, errors: [], data: parsed.data }
 }

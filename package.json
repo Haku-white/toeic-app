@@ -22,7 +22,8 @@
     "content:validate": "tsx scripts/content-generation/validate_batch.ts",
     "content:review": "tsx scripts/content-generation/review_batch.ts",
     "content:commit": "tsx scripts/content-generation/commit_batch.ts",
-    "backfill:auto": "tsx scripts/content-generation/auto_backfill.ts"
+    "backfill:auto": "tsx scripts/content-generation/auto_backfill.ts",
+    "enhance:explanations": "tsx scripts/content-generation/enhance_explanations.ts"
   },
   "keywords": [],
   "author": "",

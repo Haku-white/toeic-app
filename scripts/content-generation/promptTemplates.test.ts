@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
+  ADDITIONAL_EXPLANATION_JSON_SCHEMA,
+  buildGrammarAdditionalExplanationPrompt,
   buildGrammarPrompt,
   buildIdiomPrompt,
+  buildVocabAdditionalExplanationPrompt,
   buildVocabPrompt,
   GRAMMAR_JSON_SCHEMA,
   VOCAB_JSON_SCHEMA,
@@ -83,5 +86,40 @@ describe('buildIdiomPrompt', () => {
   it('falls back to a placeholder message when there are no existing idioms', () => {
     const prompt = buildIdiomPrompt({ count: 1, targetBand: 600, existingWords: [] })
     expect(prompt).toContain('（なし）')
+  })
+})
+
+describe('buildGrammarAdditionalExplanationPrompt (11.3)', () => {
+  it('embeds the item count, items as JSON with target_id, and the JSON schema', () => {
+    const prompt = buildGrammarAdditionalExplanationPrompt({
+      items: [
+        {
+          targetId: 'q-1',
+          question_text: 'The company ___ its report by Friday.',
+          accuracy_rate: 0.5,
+          attempt_count: 8,
+        },
+      ],
+    })
+
+    expect(prompt).toContain('文法問題1件です')
+    expect(prompt).toContain('"target_id": "q-1"')
+    expect(prompt).toContain('"question_text": "The company ___ its report by Friday."')
+    expect(prompt).toContain(JSON.stringify(ADDITIONAL_EXPLANATION_JSON_SCHEMA, null, 2))
+    expect(prompt).not.toMatch(/\{\{\w+\}\}/)
+  })
+})
+
+describe('buildVocabAdditionalExplanationPrompt (11.3)', () => {
+  it('embeds the item count, items as JSON with target_id, and the JSON schema', () => {
+    const prompt = buildVocabAdditionalExplanationPrompt({
+      items: [{ targetId: 'v-1', word: 'negotiate', again_rate: 0.4, review_count: 6 }],
+    })
+
+    expect(prompt).toContain('単語1件です')
+    expect(prompt).toContain('"target_id": "v-1"')
+    expect(prompt).toContain('"word": "negotiate"')
+    expect(prompt).toContain(JSON.stringify(ADDITIONAL_EXPLANATION_JSON_SCHEMA, null, 2))
+    expect(prompt).not.toMatch(/\{\{\w+\}\}/)
   })
 })

@@ -10,6 +10,8 @@ export interface VocabCard {
   exampleSentenceJa: string | null
   /** 接頭辞・語幹・接尾辞の分解と意味のヒント。バッチ生成データ・モックデータともに任意項目のためnull許容 */
   etymologyNote: string | null
+  /** 11章: again率が高い単語に自動生成される補足解説。既存のetymologyNoteは上書きしない */
+  additionalExplanation: string | null
   /** null = このユーザーにとって初出の単語（`user_vocab_progress`行がまだ無い） */
   progress: VocabProgressState | null
 }
@@ -23,6 +25,7 @@ export interface VocabWordRow {
   example_sentence_en: string
   example_sentence_ja: string | null
   etymology_note: string | null
+  additional_explanation: string | null
 }
 
 /** 14章の総合問題（mixedDrill.ts）でも同じ行マッピングを再利用するためexportしている */
@@ -62,6 +65,7 @@ function wordRowToCard(word: VocabWordRow, progress: VocabProgressState | null):
     exampleSentenceEn: word.example_sentence_en,
     exampleSentenceJa: word.example_sentence_ja,
     etymologyNote: word.etymology_note,
+    additionalExplanation: word.additional_explanation,
     progress,
   }
 }

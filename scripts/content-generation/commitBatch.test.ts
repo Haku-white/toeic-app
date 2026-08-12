@@ -423,3 +423,93 @@ describe('commitBatch (vocab)', () => {
     expect(result).toEqual({ committedCount: 0, failedCount: 1 })
   })
 })
+
+describe('commitBatch (grammar_explanation / vocab_explanation, 11.3)', () => {
+  it('updates the target grammar_questions row via UPDATE (not INSERT) and marks the item committed', async () => {
+    const explanationItem = { target_id: 'q-1', additional_explanation: '補足' }
+
+    const itemsDispatch = makeDispatcher([
+      { data: [{ id: 'item-1', raw_payload: explanationItem }], error: null },
+      { data: null, error: null }, // item-1 update -> committed
+      { data: null, error: null, count: 1 },
+      { data: null, error: null, count: 0 },
+      { data: null, error: null, count: 0 },
+      { data: null, error: null, count: 0 },
+    ])
+    const batchesDispatch = makeDispatcher([
+      { data: { content_type: 'grammar_explanation' }, error: null },
+      { data: null, error: null },
+    ])
+
+    const grammarQuestionsBuilder = makeQueryBuilder({ data: null, error: null })
+    let updateArgs: unknown
+    let eqArgs: unknown[] = []
+    grammarQuestionsBuilder.update = vi.fn((fields: unknown) => {
+      updateArgs = fields
+      return grammarQuestionsBuilder
+    })
+    grammarQuestionsBuilder.eq = vi.fn((...args: unknown[]) => {
+      eqArgs = args
+      return Promise.resolve({ data: null, error: null })
+    })
+
+    const from = vi.fn((table: string) => {
+      if (table === 'generation_batches') return batchesDispatch()
+      if (table === 'generation_batch_items') return itemsDispatch()
+      if (table === 'grammar_questions') return grammarQuestionsBuilder
+      throw new Error(`unexpected table: ${table}`)
+    })
+    const supabase = { from } as unknown as Parameters<typeof commitBatch>[1]['supabase']
+
+    const result = await commitBatch('batch-exp-1', { supabase })
+
+    expect(result).toEqual({ committedCount: 1, failedCount: 0 })
+    expect(updateArgs).toEqual({ additional_explanation: '補足' })
+    expect(eqArgs).toEqual(['id', 'q-1'])
+    expect(grammarQuestionsBuilder.insert).not.toHaveBeenCalled()
+  })
+
+  it('updates the target vocab_words row via UPDATE for vocab_explanation content type', async () => {
+    const explanationItem = { target_id: 'v-1', additional_explanation: '綴りが似た語との違い。' }
+
+    const itemsDispatch = makeDispatcher([
+      { data: [{ id: 'item-1', raw_payload: explanationItem }], error: null },
+      { data: null, error: null },
+      { data: null, error: null, count: 1 },
+      { data: null, error: null, count: 0 },
+      { data: null, error: null, count: 0 },
+      { data: null, error: null, count: 0 },
+    ])
+    const batchesDispatch = makeDispatcher([
+      { data: { content_type: 'vocab_explanation' }, error: null },
+      { data: null, error: null },
+    ])
+
+    const vocabWordsBuilder = makeQueryBuilder({ data: null, error: null })
+    let updateArgs: unknown
+    let eqArgs: unknown[] = []
+    vocabWordsBuilder.update = vi.fn((fields: unknown) => {
+      updateArgs = fields
+      return vocabWordsBuilder
+    })
+    vocabWordsBuilder.eq = vi.fn((...args: unknown[]) => {
+      eqArgs = args
+      return Promise.resolve({ data: null, error: null })
+    })
+
+    const from = vi.fn((table: string) => {
+      if (table === 'generation_batches') return batchesDispatch()
+      if (table === 'generation_batch_items') return itemsDispatch()
+      if (table === 'vocab_words') return vocabWordsBuilder
+      throw new Error(`unexpected table: ${table}`)
+    })
+    const supabase = { from } as unknown as Parameters<typeof commitBatch>[1]['supabase']
+
+    const result = await commitBatch('batch-exp-2', { supabase })
+
+    expect(result).toEqual({ committedCount: 1, failedCount: 0 })
+    expect(updateArgs).toEqual({ additional_explanation: '綴りが似た語との違い。' })
+    expect(eqArgs).toEqual(['id', 'v-1'])
+    expect(vocabWordsBuilder.insert).not.toHaveBeenCalled()
+  })
+})

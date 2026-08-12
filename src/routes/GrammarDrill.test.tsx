@@ -51,6 +51,7 @@ const drillData: GrammarDrillData = {
       choices: ['will have submitted', 'submits', 'submitted', 'submitting'],
       correctIndex: 0,
       explanation: '未来完了形を使う。',
+      additionalExplanation: null,
       difficulty: 3,
     },
     {
@@ -60,6 +61,7 @@ const drillData: GrammarDrillData = {
       choices: ['works', 'has worked', 'will work', 'working'],
       correctIndex: 1,
       explanation: '現在完了形を使う。',
+      additionalExplanation: '"since"は起点を表す前置詞で、現在完了形とセットで使われる典型パターンです。',
       difficulty: 2,
     },
   ],
@@ -103,6 +105,25 @@ describe('GrammarDrill', () => {
       selectedIndex: 1,
       isCorrect: false,
     })
+    // q-1のadditionalExplanationはnullのため「よくある間違いのポイント」は表示されない
+    expect(screen.queryByText('よくある間違いのポイント')).not.toBeInTheDocument()
+  })
+
+  it('shows the "よくある間違いのポイント" box when the question has an additionalExplanation (11章)', async () => {
+    vi.mocked(getGrammarDrillData).mockResolvedValue(drillData)
+    renderGrammarDrill()
+
+    fireEvent.click(await screen.findByRole('button', { name: /will have submitted/ }))
+    fireEvent.click(await screen.findByRole('button', { name: '次の問題へ' }))
+
+    expect(await screen.findByText('She ___ here since 2020.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /has worked/ }))
+
+    expect(await screen.findByText('現在完了形を使う。')).toBeInTheDocument()
+    expect(screen.getByText('よくある間違いのポイント')).toBeInTheDocument()
+    expect(
+      screen.getByText('"since"は起点を表す前置詞で、現在完了形とセットで使われる典型パターンです。'),
+    ).toBeInTheDocument()
   })
 
   it('does not change the answer after the question has already been answered', async () => {

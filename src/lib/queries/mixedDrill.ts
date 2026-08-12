@@ -11,6 +11,8 @@ export interface MixedQuestion {
   correctIndex: number
   /** grammarは既存explanation、vocabはetymology_noteを流用（14.2） */
   explanation: string | null
+  /** 11章: 正答率/記憶定着率が低い場合に自動生成される補足解説（additional_explanation） */
+  additionalExplanation: string | null
   /** kind='grammar'のとき submitGrammarAttempt 用 */
   grammarQuestionId?: string
   /** kind='vocab'のとき submitVocabReview 用 */
@@ -41,6 +43,7 @@ function grammarQuestionToMixed(q: GrammarQuestion): MixedQuestion {
     choices: q.choices,
     correctIndex: q.correctIndex,
     explanation: q.explanation,
+    additionalExplanation: q.additionalExplanation,
     grammarQuestionId: q.id,
   }
 }
@@ -77,6 +80,7 @@ export function buildVocabQuizQuestion(
     choices,
     correctIndex,
     explanation: target.etymology_note,
+    additionalExplanation: target.additional_explanation,
     vocabWordId: target.id,
     vocabProgress,
   }

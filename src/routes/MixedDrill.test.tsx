@@ -60,6 +60,7 @@ const questions: MixedQuestion[] = [
     choices: ['will have submitted', 'submits', 'submitted', 'submitting'],
     correctIndex: 0,
     explanation: '未来完了形を使う。',
+    additionalExplanation: null,
     grammarQuestionId: 'q1',
   },
   {
@@ -69,6 +70,7 @@ const questions: MixedQuestion[] = [
     choices: ['交渉する', '払い戻す', '子会社', '在庫'],
     correctIndex: 0,
     explanation: 'neg-note',
+    additionalExplanation: '"negotiate"と"negate"は綴りが似ているため混同しやすい単語です。',
     vocabWordId: 'v1',
     vocabProgress: null,
   },
@@ -120,6 +122,30 @@ describe('MixedDrill', () => {
       vocabWordId: 'v1',
       rating: 'hard',
     })
+  })
+
+  it('shows the "よくある間違いのポイント" box when the question has an additionalExplanation (11章)', async () => {
+    vi.mocked(getMixedDrillQuestions).mockResolvedValue([questions[1]])
+    renderMixedDrill()
+
+    expect(await screen.findByText('「negotiate」の意味として最も適切なものを選んでください。')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /交渉する/ }))
+
+    expect(await screen.findByText('よくある間違いのポイント')).toBeInTheDocument()
+    expect(
+      screen.getByText('"negotiate"と"negate"は綴りが似ているため混同しやすい単語です。'),
+    ).toBeInTheDocument()
+  })
+
+  it('does not show the "よくある間違いのポイント" box when additionalExplanation is null', async () => {
+    vi.mocked(getMixedDrillQuestions).mockResolvedValue([questions[0]])
+    renderMixedDrill()
+
+    expect(await screen.findByText('The company ___ its report by Friday.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /will have submitted/ }))
+
+    expect(await screen.findByText('未来完了形を使う。')).toBeInTheDocument()
+    expect(screen.queryByText('よくある間違いのポイント')).not.toBeInTheDocument()
   })
 
   it('submits a vocab review with rating "again" when the 4-choice answer is incorrect', async () => {

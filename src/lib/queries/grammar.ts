@@ -14,6 +14,8 @@ export interface GrammarQuestion {
   choices: string[]
   correctIndex: number
   explanation: string | null
+  /** 11章: 正答率が低い問題に自動生成される補足解説。既存のexplanationは上書きしない */
+  additionalExplanation: string | null
   difficulty: number
 }
 
@@ -36,6 +38,7 @@ interface GrammarQuestionRow {
   choices: string[]
   correct_index: number
   explanation: string | null
+  additional_explanation: string | null
   difficulty: number
 }
 
@@ -51,6 +54,7 @@ function questionRowToQuestion(row: GrammarQuestionRow): GrammarQuestion {
     choices: row.choices,
     correctIndex: row.correct_index,
     explanation: row.explanation,
+    additionalExplanation: row.additional_explanation,
     difficulty: row.difficulty,
   }
 }

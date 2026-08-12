@@ -40,6 +40,15 @@
   - **CLI**（`auto_backfill.ts`、新規）: `npm run backfill:auto -- [--dry-run] [--max-total] [--batch-size] [--concurrency] [--throttle-ms] [--grammar-threshold/target] [--vocab-threshold/target] [--model]`。在庫チェック結果・実行結果（タスクごとの生成/検証/コミット件数、needs_reviewが出たタスクのレビューコマンド、諦めた件数、上限超過でスキップしたラベル）を明示的に出力する（10.10のトレーサビリティ方針）。cron等の定期実行は今回スコープ外とし11章の未決事項に記録した。needs_reviewのエスカレート運用は既存方針（エージェントが一次判断、本当に曖昧なものだけユーザーへ）をそのまま踏襲し、新しい仕組みは実装していない。
   - **DESIGN.mdの実装追いつき状況**: 8章（Gemini APIパイプライン）が実装（13章のイディオム・16章のvocab_tags code分離・17章のリトライ戦略・19章のセルフチェック改訂を含む）から大きく取り残されていることを発見。今回のタスク範囲を超えるため全面書き直しはスコープ外とし、11章の未決事項に記録した（詳細は10章冒頭参照）。
   - テスト: `npm test`（246件全て成功、207件から+39件——`gemini.test.ts`に10件、`generateGrammar.test.ts`に1件、`generateVocab.test.ts`に1件、`validateBatch.test.ts`に3件、新規`inventoryCheck.test.ts`に5件、新規`concurrencyPool.test.ts`に4件、新規`autoBackfill.test.ts`に15件）・`npm run lint`（0件）・`npm run typecheck`（0件）・`npm run typecheck:scripts`（0件）。
+- 2026-08-12: 間違いが多い問題への自動解説追加（11章）を実装。設計は実装前にDESIGN.md 11章として追記済み（本エントリは実装完了の記録）。**このエントリは今回実装した11章の範囲のみを対象とし、既存の8章の記載が実装から取り残されている問題（10章冒頭・11章の未決事項に既に記録済み）とは混同しない**。
+  - **対象抽出ロジック**（`weaknessDetection.ts`、新規）: `findWeakGrammarQuestions`/`findWeakVocabWords`。文法は`user_grammar_attempts`を`question_id`単位で集計する新規ビュー`grammar_question_accuracy_stats`から正答率70%未満（5章・9.6のWeakPoints既存閾値と統一）かつ試行回数5回以上の問題を抽出。語彙は`vocab_review_logs`を`vocab_word_id`単位で集計する新規ビュー`vocab_word_again_stats`から`rating='again'`比率30%以上かつレビュー回数5回以上の単語を抽出。**30%の根拠**: FSRSの`again`は明確な想起失敗を表し、チューニングされたSRSデッキの定常状態のagain率はおよそ10〜20%程度に収まることが多いため、それより明確に高い30%を「継続的に思い出せていない語彙」だけに絞り込む保守的な初期値として設定した（11.1参照、`--vocab-min-again-rate`で上書き可能）。既に`additional_explanation`が設定済みの行は対象から除外する。
+  - **DBスキーマ変更**（新規マイグレーション`20260811080000_add_additional_explanation.sql`、ローカルDBに適用済み・クラウド未反映）: `grammar_questions`・`vocab_words`それぞれに**nullableな`additional_explanation text`列を追加**（既存の`explanation`/`etymology_note`は無変更）。判定用に`grammar_question_accuracy_stats`/`vocab_word_again_stats`ビューを追加（既存の`user_grammar_category_stats`等と同じ`security_invoker=true`方針、ただし`user_id`単位ではなく`question_id`/`vocab_word_id`単位でユーザー横断集計する点が異なる、11.2参照）。既存の`generation_batch_items`/`review_batch.ts`のneeds_reviewフローを再利用するため`content_type` enumに`'grammar_explanation'`/`'vocab_explanation'`を追加（既存2値の意味は不変）。**クラウドへの反映（`supabase db push`）は未実施**——CLAUDE.mdの確認事項（クラウドDBへのマイグレーション反映）に該当するため、ユーザーの許可待ちとした。
+  - **生成パイプラインの再利用・拡張**: 新規プロンプト`prompts/grammar_additional_explanation.md`/`prompts/vocab_additional_explanation.md`（対象項目リストをJSONで埋め込み、出力は`{target_id, additional_explanation}`の配列——`target_id`をレスポンスに含めさせ配列順序に依存せず対応付ける、8.4③の`solved_index`取り違えの教訓を踏襲）。新規`generateGrammarExplanations`/`generateVocabExplanations`（`generateExplanationEnhancement.ts`）が`generateJsonArray`経由で生成し`generation_batch_items`に保存。`validateBatch.ts`に`grammar_explanation`/`vocab_explanation`の新しい検証分岐を追加（構造チェック＋対象行の実在確認・未設定確認のみ、**セルフチェックは意図的に実装しない**——客観的に検証可能な判定軸が無いため、11.3参照）。`commitBatch.ts`に新規`commitGrammarExplanationItem`/`commitVocabExplanationItem`を追加（既存のINSERT系コミット関数と異なり、対象行への`UPDATE`）。`review_batch.ts`はcontent_type非依存の実装のため無変更で新content_type 2種にもそのまま使えた。
+  - **バッチ化・503対策の流用**: `concurrencyPool.ts`（同時実行数2・間隔1500ms）をそのまま再利用。`autoBackfill.ts`の`generateWithShrinkRetry`/`ShrinkRetryOutcome`をexportし、判定ロジック（`isRetryableError`）・縮小幅（最大3段階、既定8→4→2）を共有する変種`generateExplanationsWithShrinkRetry`（`enhanceExplanations.ts`）を新設——既存版は「件数」を縮小するが、こちらは対象が既存の特定行のため「対象アイテムの配列」を半分に割って縮小する点が異なる。
+  - **1回あたりの対象件数上限**: 既定**50件/回**。根拠: セルフチェックを行わない設計のため1項目あたりGemini呼び出しは高々1回（10章の自動問題生成は文法で最大2回/件）で済み、コスト効率が良い。バッチサイズ8件なら約7回の生成呼び出しで済む水準として、10章の100件より低いが弱点解消に実質的な効果が出る規模として50件を選んだ（11.6参照）。文法優先で予算を消費し残りを語彙に割り当てる（`--max-total`で上書き可能）。
+  - **CLI**（`enhance_explanations.ts`、新規）: `npm run enhance:explanations -- [--dry-run] [--max-total] [--batch-size] [--concurrency] [--throttle-ms] [--grammar-min-attempts/max-accuracy] [--vocab-min-reviews/min-again-rate] [--model]`。cron等の定期実行は今回スコープ外とし、10章の自動問題生成と合わせて12章の未決事項に記録した。needs_reviewのエスカレート運用は既存方針（エージェントが一次判断、本当に曖昧なものだけユーザーへ）をそのまま踏襲。
+  - **フロントエンド表示**: `src/lib/queries/grammar.ts`/`mixedDrill.ts`/`vocab.ts`に`additionalExplanation`フィールドを追加（`select('*')`のため取得側の変更は型定義とマッピングのみ）。GrammarDrill.tsx/MixedDrill.tsx/VocabReview.tsxで既存の解説ボックスの下に、`additionalExplanation`がある場合のみ「よくある間違いのポイント」ボックスを追加表示。既存デザイントークンをそのまま使い、WeakPointsの警告色（`incorrect`系、正答率70%未満の強調と同じ配色）を流用して`border-incorrect-200 bg-incorrect-50`＋`text-incorrect-700`のラベルとした（新しい配色トークンは導入していない）。
+  - テスト: `npm test`（282件全て成功、246件から+36件——`schemas.test.ts`に4件、`structuralValidation.test.ts`に3件、`promptTemplates.test.ts`に2件、`validateBatch.test.ts`に5件、`commitBatch.test.ts`に2件、新規`weaknessDetection.test.ts`に4件、新規`generateExplanationEnhancement.test.ts`に3件、新規`enhanceExplanations.test.ts`に8件、`GrammarDrill.test.tsx`に1件、`MixedDrill.test.tsx`に2件、`VocabReview.test.tsx`に2件）・`npm run lint`（0件）・`npm run typecheck`（0件）・`npm run typecheck:scripts`（0件）。
 
 ---
 
@@ -843,14 +852,69 @@ DB全体との近似重複検出（8.4②、既存）に加え、**同一バッ�
 
 ---
 
-## 11. 未決事項 / 次のステップ
+## 11. 間違いが多い問題への自動解説追加【設計案】
+
+正答率・記憶定着率が低い問題/単語を自動検出し、既存の解説（`grammar_questions.explanation`/`vocab_words.etymology_note`）を上書きせず、補足の追加解説を自動生成してDBに反映する。10章のバッチ化・503対策・needs_reviewフローをそのまま流用する。
+
+### 11.1 「間違いが多い」の判定基準
+
+- **文法**: `user_grammar_attempts`を`question_id`単位で集計し、**正答率70%未満**（5章・9.6のWeakPointsダッシュボードの既存閾値と統一）かつ**試行回数5回以上**の問題を対象とする。5回未満は統計的信頼性が低いため対象外（依頼どおりの基準）。
+- **語彙**: `vocab_review_logs`を`vocab_word_id`単位で集計し、`rating='again'`の比率が**30%以上**かつ**レビュー回数5回以上**の単語を対象とする。
+  - **30%の根拠**: FSRSにおける`again`は「思い出せなかった」という明確な想起失敗を表す（`hard`は思い出せたが確信度が低いだけで想起失敗ではない、既存の6.5参照）。一般的にチューニングされたSRSデッキの定常状態でのagain率はおよそ10〜20%程度に収まることが多く、30%はそれより明確に高い水準——「単に少し苦手」ではなく「継続的に思い出せていない」語彙だけを対象に絞り込むための、やや保守的な（＝過検出を避ける）初期値として設定した。実データで調整可能なようCLI引数（`--vocab-min-again-rate`）で上書きできるようにする。
+- 既に`additional_explanation`が設定済みの行は対象から除外する（再生成の重複防止、11.2参照）。
+
+### 11.2 DBスキーマ変更（新規マイグレーション）
+
+- `grammar_questions`・`vocab_words`それぞれに**nullableな`additional_explanation text`列を追加**する（既存の`explanation`/`etymology_note`は一切変更しない、後方互換な追加のみ）。`etymology_note`列追加時（`20260809042257_add_vocab_etymology_note.sql`）と同じスタイルの`alter table ... add column`で実装する。
+- **判定用の集計ビューを2つ追加**する（5章・9.6の`user_grammar_category_stats`/`user_vocab_tag_stats`と同じ設計方針・`security_invoker=true`を踏襲。ただし既存ビューは`user_id`単位の集計だが、今回は「どのユーザーが」ではなく「どの問題/単語が」苦手かを見たいため、`question_id`/`vocab_word_id`単位でユーザー横断集計する点が異なる）:
+  - `grammar_question_accuracy_stats(question_id, attempt_count, correct_count, accuracy_rate)`
+  - `vocab_word_again_stats(vocab_word_id, review_count, again_count, again_rate)`
+  - `security_invoker=true`のため、一般ユーザーが直接クエリした場合はRLS越しに自分の行だけの集計になり実害はない。本機能はservice_roleで動くスクリプトからのみ使うため、RLSがバイパスされ実際に全ユーザー横断の集計が取得できる（既存の管理系クエリと同じ前提）。
+- `generation_batches.content_type`（enum、既存値`'vocab' | 'grammar'`）に**`'grammar_explanation'`・`'vocab_explanation'`を追加**（`alter type content_type add value`、既存2値の意味は変えない後方互換な追加）。既存の`generation_batch_items`のneeds_review振り分け・レビューCLI（`review_batch.ts`）をそのまま再利用するための拡張。
+
+### 11.3 生成パイプラインの再利用・拡張
+
+- **新規プロンプト**（`prompts/grammar_additional_explanation.md` / `prompts/vocab_additional_explanation.md`）: 既存の`grammar.md`/`vocab.md`（新規問題の生成）とは目的が異なる（既存項目への補足解説の生成）ため別テンプレートとするが、`loadTemplate`/`fillTemplate`の仕組みはそのまま使う。入力は対象項目のリスト（`target_id`・問題文/単語・既存の解説・正答率/again率）をJSONとして埋め込み、出力は`{target_id, additional_explanation}`の配列（`ADDITIONAL_EXPLANATION_JSON_SCHEMA`、8.3のGRAMMAR/VOCAB_JSON_SCHEMAと同じARRAY形式）とする。`target_id`をレスポンスに必ず含めさせることで、レスポンスの配列順序に依存せず`target_id`で確実に対応付ける（8.4③のセルフチェックで`solved_index`の対応取り違えが起きた教訓を踏まえた設計）。
+- **セルフチェックは実装しない（意図的なスコープ縮小）**: 8.4③の一意性セルフチェックは「正解を伏せて解かせ、`correct_index`と一致するか」という客観的に検証可能な判定軸があるが、追加解説の「内容が正しいか」を検証するには同程度に信頼できる自動判定軸が無い（2回目のGemini呼び出しで判定させても、その判定自体の正しさを担保できない）。コストをかけて曖昧な検証を追加するより、構造チェック（8.4①相当: `target_id`が有効なUUIDで対象行が実在し、かつ未設定であること）のみで`auto_passed`とし、疑わしい内容は既存のneeds_reviewフロー・エージェントの一次判断に委ねる方が一貫している。
+- **構造チェック**（`structuralValidation.ts`拡張）: `validateAdditionalExplanationItemStructure`。Zod検証（`target_id`が UUID・`additional_explanation`が空でない）に加え、`validateBatch.ts`側で対象行（`grammar_questions`/`vocab_words`）の実在確認と「`additional_explanation`が未設定であること」を確認する。
+- **コミット**（`commitBatch.ts`拡張）: 新規`commitGrammarExplanationItem`/`commitVocabExplanationItem`。既存の`commitGrammarItem`/`commitVocabItem`はINSERTだが、こちらは対象行への`UPDATE ... SET additional_explanation = ...`。1件の失敗が他の項目に影響しない既存方針（`try/catch`＋needs_review差し戻し）をそのまま踏襲する。
+- **人力/エージェントレビュー**（`review_batch.ts`）: 変更不要。`generation_batch_items`をcontent_typeに依らず汎用的に扱う実装のため、そのまま新しいcontent_type 2種にも使える。
+
+### 11.4 バッチ化・503対策の流用
+
+10章の`concurrencyPool.ts`（同時実行数2・間隔1500ms、既定値は10.8と同じ）をそのまま使う。`generateWithShrinkRetry`（10.7）は「件数」を縮小しながら再生成する設計だったが、本機能は「既存の特定の行」に対する解説生成のため、件数ではなく**対象アイテムの配列そのものを半分に割って縮小retryする**変種`generateExplanationsWithShrinkRetry`を新設する（制御フロー・縮小幅（最大3段階、既定8→4→2）・429/5xx判定（`isRetryableError`）はすべて10.7と共通、`autoBackfill.ts`から`generateWithShrinkRetry`/`ShrinkRetryOutcome`をexportして型・判定ロジックを再利用する）。
+
+### 11.5 実行トリガーとスコープ
+
+- CLIスクリプト（`npx tsx scripts/content-generation/enhance_explanations.ts`、`npm run enhance:explanations`）による手動実行のみ。cron等の定期実行はスコープ外とし、10.11であわせて記録済みの「無人実行時のエラー通知・Gemini APIコスト上限の設計」課題に含める（12章の未決事項にも追記）。
+- CLI引数: `--dry-run`（対象件数のみ表示）、`--max-total`（11.6）、`--batch-size`（既定8）、`--concurrency`（既定2）、`--throttle-ms`（既定1500）、`--grammar-min-attempts`（既定5）、`--grammar-max-accuracy`（既定0.7）、`--vocab-min-reviews`（既定5）、`--vocab-min-again-rate`（既定0.3）、`--model`。
+
+### 11.6 1回あたりの対象件数上限
+
+- **既定値: 合計50件/回**。根拠: 本機能はセルフチェック（2回目のGemini呼び出し）を行わない設計（11.3）のため、1項目あたり必要なGemini呼び出しはバッチ内の按分で高々1回——10章の自動問題生成（文法は生成+セルフチェックで最大2回/件）よりコスト効率が良い。それでもバッチサイズ8件なら約7回の生成呼び出しで済む水準として、手動実行1回あたりの時間・コストを抑えつつ弱点解消に実質的な効果が出る規模として50件を選んだ。文法・語彙の内訳は文法優先で予算を消費し、残りを語彙に割り当てる（どちらも同じ弱点対策という性質のため優先順位に強い根拠は無く、実装のシンプルさを優先した判断）。`--max-total`で上書き可能。
+- 上限超過分は次回実行時に閾値未満のままなので自動的に再検出される。
+
+### 11.7 フロントエンド表示
+
+- 既存の解説ボックス（`GrammarDrill.tsx`/`MixedDrill.tsx`の`explanation`表示、`VocabReview.tsx`の「語源のヒント」表示）とは別に、`additionalExplanation`がある場合のみ**既存解説の下に追加**する。既存デザイントークンをそのまま使い、新しい配色・レイアウトパターンは持ち込まない。
+  - コンテナは既存の解説ボックスと同じ`rounded border ... px-3 py-2`だが、「これは弱点として自動検出された補足」であることが一目で分かるよう、色調は`WeakPoints`（5章・9.6・20章）の警告色（`incorrect`系、正答率70%未満の強調と同じ配色）を流用する: `border-incorrect-200 bg-incorrect-50`。ラベルは`text-xs font-medium text-incorrect-700`で「よくある間違いのポイント」、本文は`mt-1 text-sm text-neutral-700`（本文自体は既存の解説文と同じ読みやすさを優先し、警告色を強めすぎない）。
+  - 新しい配色トークンや異なるコンポーネント構造は導入しない（依頼にある「既存のデザイントークン・『計器盤』コンセプトに沿わせる」を、既存のcorrect/incorrect二階調の一貫性を保つ、という意味で解釈した）。
+
+### 11.8 needs_reviewのエスカレート運用
+
+10.13と同じ既存方針をそのまま踏襲する: エージェントが`review_batch.ts`相当の判断で一次判断し、本当に曖昧なケースのみユーザーにエスカレートする。新しい仕組みは実装しない。
+
+---
+
+## 12. 未決事項 / 次のステップ
 
 - レビューCLI（`review_batch.ts`）の具体的なUX（承認・却下・その場編集のコマンド設計）
 - 一意性セルフチェックの`confidence`閾値・類似度閾値（0.6, 0.8）の妥当性検証（実データで調整予定）
 - ~~Gemini API失敗時のリトライ戦略~~ **解決済み**: `gemini.ts`の`generateJson`/`generateJsonArray`が429/5xx対象に5回・指数バックオフでリトライする実装済み（コード上は「17章」と参照されているが本ファイルには未記載だった。10章と合わせて整理が必要——上記「前提として発見した既存実装とのズレ」参照）。
 - ドリルセッションの出題順（弱点カテゴリを優先出題するか、ランダムか）のロジック
 - 弱点ダッシュボードの「警告色」閾値（70%）の妥当性は実データで調整
-- 自動問題生成（10章）の定期実行化（cron等）——無人実行時のエラー通知・Gemini APIコスト上限の設計が必要
-- DESIGN.mdの8章（Gemini APIパイプライン）が実装（13章のイディオム・16章のvocab_tags code分離・17章のリトライ戦略・19章のセルフチェック改訂を含む一連の変更）から大きく取り残されている（10章冒頭「前提として発見した既存実装とのズレ」参照）。実装に追いつく形での全面的な書き直しが必要
+- 自動問題生成（10章）・間違いが多い問題への自動解説追加（11章）の定期実行化（cron等）——無人実行時のエラー通知・Gemini APIコスト上限の設計が必要
+- 語彙の30%（11.1）・文法の70%（既存、5章）といった閾値の妥当性は実データで調整予定
+- DESIGN.mdの8章（Gemini APIパイプライン）が実装（13章のイディオム・16章のvocab_tags code分離・17章のリトライ戦略・19章のセルフチェック改訂を含む一連の変更）から大きく取り残されている（10章冒頭「前提として発見した既存実装とのズレ」参照、11章は今回のセッションで実装した範囲のみ記録済み・この取り残し分とは別）。実装に追いつく形での全面的な書き直しが必要
 
 

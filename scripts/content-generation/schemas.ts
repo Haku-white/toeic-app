@@ -39,3 +39,14 @@ export const selfCheckResultSchema = z.object({
   confidence: z.number().min(0).max(1),
 })
 export type SelfCheckResult = z.infer<typeof selfCheckResultSchema>
+
+/**
+ * 11.3 追加解説（間違いが多い問題への自動解説追加）のJSON Schemaに対応するZodスキーマ。
+ * `target_id`をレスポンスに含めさせることで、配列の並び順に依存せず対応付ける
+ * （8.4③の`solved_index`取り違えの教訓を踏まえた設計、11.3参照）。
+ */
+export const additionalExplanationItemSchema = z.object({
+  target_id: z.string().uuid(),
+  additional_explanation: z.string().min(1),
+})
+export type AdditionalExplanationItem = z.infer<typeof additionalExplanationItemSchema>

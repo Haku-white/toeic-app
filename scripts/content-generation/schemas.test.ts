@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { grammarItemSchema, selfCheckResultSchema, vocabItemSchema } from './schemas'
+import { additionalExplanationItemSchema, grammarItemSchema, selfCheckResultSchema, vocabItemSchema } from './schemas'
 
 const validGrammarItem = {
   question_text: 'The company ___ its report by Friday.',
@@ -102,5 +102,32 @@ describe('selfCheckResultSchema', () => {
       confidence: 0.4,
     })
     expect(result.success).toBe(true)
+  })
+})
+
+describe('additionalExplanationItemSchema (11.3)', () => {
+  const validItem = {
+    target_id: '123e4567-e89b-12d3-a456-426614174000',
+    additional_explanation: 'よくある間違いの補足。',
+  }
+
+  it('accepts a well-formed item', () => {
+    expect(additionalExplanationItemSchema.safeParse(validItem).success).toBe(true)
+  })
+
+  it('rejects a target_id that is not a UUID', () => {
+    const result = additionalExplanationItemSchema.safeParse({ ...validItem, target_id: 'not-a-uuid' })
+    expect(result.success).toBe(false)
+  })
+
+  it('rejects an empty additional_explanation', () => {
+    const result = additionalExplanationItemSchema.safeParse({ ...validItem, additional_explanation: '' })
+    expect(result.success).toBe(false)
+  })
+
+  it('rejects a missing target_id', () => {
+    const { target_id: _omit, ...withoutTargetId } = validItem
+    const result = additionalExplanationItemSchema.safeParse(withoutTargetId)
+    expect(result.success).toBe(false)
   })
 })

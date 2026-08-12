@@ -76,6 +76,7 @@ describe('getGrammarDrillData', () => {
               choices: ['will have submitted', 'submits', 'submitted', 'submitting'],
               correct_index: 0,
               explanation: '未来完了形を使う。',
+              additional_explanation: null,
               difficulty: 2,
             },
           ],
@@ -95,6 +96,7 @@ describe('getGrammarDrillData', () => {
       choices: ['will have submitted', 'submits', 'submitted', 'submitting'],
       correctIndex: 0,
       explanation: '未来完了形を使う。',
+      additionalExplanation: null,
       difficulty: 2,
     })
   })

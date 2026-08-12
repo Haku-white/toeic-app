@@ -8,8 +8,10 @@ function fillTemplate(template: string, values: Record<string, string>): string 
   return template.replace(/\{\{(\w+)\}\}/g, (match, key: string) => (key in values ? values[key] : match))
 }
 
-/** `prompts/{name}.md`を読み込む（8.3・13.2参照） */
-export function loadTemplate(name: 'grammar' | 'vocab' | 'idiom'): string {
+/** `prompts/{name}.md`を読み込む（8.3・13.2・11.3参照） */
+export function loadTemplate(
+  name: 'grammar' | 'vocab' | 'idiom' | 'grammar_additional_explanation' | 'vocab_additional_explanation',
+): string {
   return readFileSync(join(currentDir, 'prompts', `${name}.md`), 'utf-8')
 }
 
@@ -124,5 +126,58 @@ export function buildIdiomPrompt(params: BuildIdiomPromptParams): string {
     target_band: String(params.targetBand),
     existing_words: formatSamples(params.existingWords),
     json_schema: JSON.stringify(VOCAB_JSON_SCHEMA, null, 2),
+  })
+}
+
+/**
+ * 11.3 追加解説（間違いが多い問題への自動解説追加）の出力JSON Schema。
+ * `target_id`をレスポンスに含めさせ、配列の並び順に依存せず対応付ける。
+ */
+export const ADDITIONAL_EXPLANATION_JSON_SCHEMA = {
+  type: 'ARRAY',
+  items: {
+    type: 'OBJECT',
+    properties: {
+      target_id: { type: 'STRING' },
+      additional_explanation: { type: 'STRING' },
+    },
+    required: ['target_id', 'additional_explanation'],
+    propertyOrdering: ['target_id', 'additional_explanation'],
+  },
+} as const
+
+export interface AdditionalExplanationPromptItem {
+  targetId: string
+  [key: string]: unknown
+}
+
+export interface BuildAdditionalExplanationPromptParams {
+  items: AdditionalExplanationPromptItem[]
+}
+
+/** 11.3: 対象項目リストをJSONとして埋め込む共通ヘルパー。target_idをitems_jsonのtarget_idキーに変換する。 */
+function formatItemsForPrompt(items: AdditionalExplanationPromptItem[]): string {
+  return JSON.stringify(
+    items.map(({ targetId, ...rest }) => ({ target_id: targetId, ...rest })),
+    null,
+    2,
+  )
+}
+
+/** 11.3: 文法問題の追加解説プロンプト。既存のgrammar.md（新規生成）とは別テンプレート。 */
+export function buildGrammarAdditionalExplanationPrompt(params: BuildAdditionalExplanationPromptParams): string {
+  return fillTemplate(loadTemplate('grammar_additional_explanation'), {
+    count: String(params.items.length),
+    items_json: formatItemsForPrompt(params.items),
+    json_schema: JSON.stringify(ADDITIONAL_EXPLANATION_JSON_SCHEMA, null, 2),
+  })
+}
+
+/** 11.3: 語彙の追加解説プロンプト。既存のvocab.md（新規生成）とは別テンプレート。 */
+export function buildVocabAdditionalExplanationPrompt(params: BuildAdditionalExplanationPromptParams): string {
+  return fillTemplate(loadTemplate('vocab_additional_explanation'), {
+    count: String(params.items.length),
+    items_json: formatItemsForPrompt(params.items),
+    json_schema: JSON.stringify(ADDITIONAL_EXPLANATION_JSON_SCHEMA, null, 2),
   })
 }

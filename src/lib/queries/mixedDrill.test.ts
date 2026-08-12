@@ -39,6 +39,7 @@ function makeWord(overrides: Partial<VocabWordRow>): VocabWordRow {
     example_sentence_en: 'We negotiate.',
     example_sentence_ja: '交渉する。',
     etymology_note: 'note',
+    additional_explanation: null,
     ...overrides,
   }
 }

@@ -220,6 +220,12 @@ export default function MixedDrill() {
                 {question.explanation}
               </p>
             )}
+            {question.additionalExplanation && (
+              <div className="rounded border border-incorrect-200 bg-incorrect-50 px-3 py-2">
+                <p className="text-xs font-medium text-incorrect-700">よくある間違いのポイント</p>
+                <p className="mt-1 text-sm text-neutral-700">{question.additionalExplanation}</p>
+              </div>
+            )}
             <AskTutorPanel
               questionText={question.questionText}
               choices={question.choices}

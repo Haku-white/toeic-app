@@ -1,6 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { GrammarItem, VocabItem } from './schemas'
+import type { AdditionalExplanationItem, GrammarItem, VocabItem } from './schemas'
 import { VOCAB_TAG_CODES } from './vocabTagCodes'
+
+type ContentType = 'grammar' | 'vocab' | 'grammar_explanation' | 'vocab_explanation'
 
 export interface CommitBatchDeps {
   supabase: SupabaseClient
@@ -158,6 +160,32 @@ async function commitVocabItem(supabase: SupabaseClient, batchId: string, item: 
 }
 
 /**
+ * 11.3: 追加解説（間違いが多い問題への自動解説追加）のコミット。新規行のINSERTではなく、
+ * 既存の対象行（target_id）へのUPDATEである点が既存の`commitGrammarItem`/`commitVocabItem`と異なる。
+ * 戻り値は影響を受けた行のid（＝target_id）とし、`committed_id`に既存カラムをそのまま使う。
+ */
+async function commitGrammarExplanationItem(supabase: SupabaseClient, item: CommittableItem): Promise<string> {
+  const payload = item.raw_payload as AdditionalExplanationItem
+  const { error } = await supabase
+    .from('grammar_questions')
+    .update({ additional_explanation: payload.additional_explanation })
+    .eq('id', payload.target_id)
+  if (error) throw error
+  return payload.target_id
+}
+
+/** 11.3: 語彙版。`vocab_words.additional_explanation`をUPDATEする。 */
+async function commitVocabExplanationItem(supabase: SupabaseClient, item: CommittableItem): Promise<string> {
+  const payload = item.raw_payload as AdditionalExplanationItem
+  const { error } = await supabase
+    .from('vocab_words')
+    .update({ additional_explanation: payload.additional_explanation })
+    .eq('id', payload.target_id)
+  if (error) throw error
+  return payload.target_id
+}
+
+/**
  * 8.6: `auto_passed`/`approved`のアイテムを`grammar_questions`/`vocab_words`へ反映し、
  * 集計（committed_count/needs_review_count/rejected_count）を更新する。全アイテムが
  * committed/rejectedになった時点で`generation_batches.status = 'completed'`にする。
@@ -171,7 +199,7 @@ export async function commitBatch(batchId: string, deps: CommitBatchDeps): Promi
     .eq('id', batchId)
     .single()
   if (batchError) throw batchError
-  const contentType = (batchRow as { content_type: 'grammar' | 'vocab' }).content_type
+  const contentType = (batchRow as { content_type: ContentType }).content_type
 
   const { data: itemRows, error: itemsError } = await supabase
     .from('generation_batch_items')
@@ -191,7 +219,11 @@ export async function commitBatch(batchId: string, deps: CommitBatchDeps): Promi
       const committedId =
         contentType === 'grammar'
           ? await commitGrammarItem(supabase, batchId, item, categoryIdCache)
-          : await commitVocabItem(supabase, batchId, item)
+          : contentType === 'vocab'
+            ? await commitVocabItem(supabase, batchId, item)
+            : contentType === 'grammar_explanation'
+              ? await commitGrammarExplanationItem(supabase, item)
+              : await commitVocabExplanationItem(supabase, item)
 
       const { error: updateError } = await supabase
         .from('generation_batch_items')

@@ -192,7 +192,7 @@ function applyMaxTotalCap(
   return { descriptors: result, skippedLabels }
 }
 
-interface ShrinkRetryOutcome {
+export interface ShrinkRetryOutcome {
   batchIds: string[]
   generatedCount: number
   gaveUpCount: number
@@ -202,8 +202,12 @@ interface ShrinkRetryOutcome {
  * 10.7: 段階的なバッチサイズ縮小。gemini.ts内の5回リトライを使い切った末の429/5xx系エラー
  * （`isRetryableError`）のときのみ縮小して再試行する。それ以外の致命的エラーは即座に上位へ
  * 伝播させる（既存の一回限りバックフィルスクリプトの「予期しないエラーは中断」方針を踏襲）。
+ * `enhanceExplanations.ts`（11.4）が同じ判定ロジック・縮小幅を再利用するためexportしている
+ * （対象アイテムの配列を縮小する`generateExplanationsWithShrinkRetry`は件数ではなく配列を
+ * 扱う点が異なるため、このまま流用はせず並行する形の別関数として実装しているが、
+ * `isRetryableError`の判定・縮小段階の考え方は共通）。
  */
-async function generateWithShrinkRetry(
+export async function generateWithShrinkRetry(
   requestCount: number,
   minBatchSize: number,
   maxShrinkAttempts: number,
