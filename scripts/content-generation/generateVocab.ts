@@ -29,10 +29,11 @@ export interface GenerateVocabBatchResult {
   truncated: boolean
 }
 
-const EXISTING_SAMPLES_LIMIT = 30
+const DB_WIDE_SAMPLES_LIMIT = 100
+const SAME_TAG_SAMPLES_LIMIT = 50
 
 /**
- * 重複回避コンテキスト用の既存単語を直近N件、タグを問わずDB全体から取得する。
+ * 重複回避コンテキスト用の既存単語のうち、タグを問わずDB全体から直近N件を取得する。
  *
  * 20260810発見の不具合修正: 従来（`getExistingWordsForTag`）はタグ単位でしか既存語を
  * 見ていなかったため、既に別タグでコミット済みの単語をGeminiが再提案し、無駄な
@@ -41,22 +42,83 @@ const EXISTING_SAMPLES_LIMIT = 30
  * 実際に重複登録される実害は無かったが、この生成プロンプトへの重複回避コンテキスト自体を
  * DB全体に広げることで、そもそもneeds_reviewに落ちる頻度を減らす。
  */
-async function getExistingWords(supabase: SupabaseClient): Promise<string[]> {
+async function getDbWideExistingWords(supabase: SupabaseClient): Promise<string[]> {
   const { data: wordRows, error: wordError } = await supabase
     .from('vocab_words')
     .select('word')
     .order('created_at', { ascending: false })
-    .limit(EXISTING_SAMPLES_LIMIT)
+    .limit(DB_WIDE_SAMPLES_LIMIT)
   if (wordError) throw wordError
 
   return ((wordRows ?? []) as { word: string }[]).map((r) => r.word)
 }
 
 /**
+ * 重複回避コンテキスト用の既存単語のうち、対象タグに属する単語を直近N件取得する
+ * （`vocab_word_tags`経由、`src/lib/queries/vocab.ts`の`getWordIdsForTag`と同じ2段階クエリ）。
+ * タグがまだ1件も無い場合（新規タグ）は空配列を返す。
+ *
+ * 2026-08-12追加: DB全体を見るだけ（`getDbWideExistingWords`のみ、直近100件）では、
+ * ローカルDB（159件、イディオムの一括バックフィルが直近を占有）で実際に検証バッチを
+ * 生成したところ、ビジネスタグの一般的な単語（negotiate/implement/accommodate/
+ * preliminary/obligation/facilitate/allocate、いずれもDB全体で古い方から数えて
+ * 上位45件以内＝直近100件のサンプルにも入らない）が再生成され、needs_review
+ * （構造チェックの完全一致重複）に落ちる事例を複数確認した（DESIGN.md 16章参照）。
+ * これは「そのタグで最初に登録された基本的な単語」ほど、後から他タグへ大量投入される
+ * ほど相対的に古くなり、直近N件という窓から外れてしまうという、DB全体を見る変更だけでは
+ * 解決しない別種の問題だった。対象タグ自身の単語を別枠で必ず含めることで解消する
+ * （DB全体を見る20260810の修正と両立させる、片方だけでは不十分）。
+ */
+async function getSameTagExistingWords(supabase: SupabaseClient, tagName: string): Promise<string[]> {
+  const { data: tagRow, error: tagError } = await supabase
+    .from('vocab_tags')
+    .select('id')
+    .eq('name', tagName)
+    .maybeSingle()
+  if (tagError) throw tagError
+  if (!tagRow) return [] // 新規タグ（まだ1件も無い）
+
+  const { data: wordTagRows, error: wordTagError } = await supabase
+    .from('vocab_word_tags')
+    .select('vocab_word_id')
+    .eq('tag_id', (tagRow as { id: number }).id)
+  if (wordTagError) throw wordTagError
+
+  const wordIds = ((wordTagRows ?? []) as { vocab_word_id: string }[]).map((r) => r.vocab_word_id)
+  if (wordIds.length === 0) return []
+
+  const { data: wordRows, error: wordError } = await supabase
+    .from('vocab_words')
+    .select('word')
+    .in('id', wordIds)
+    .order('created_at', { ascending: false })
+    .limit(SAME_TAG_SAMPLES_LIMIT)
+  if (wordError) throw wordError
+
+  return ((wordRows ?? []) as { word: string }[]).map((r) => r.word)
+}
+
+/**
+ * 重複回避コンテキスト用の既存単語を、対象タグの単語（直近50件）とDB全体の単語（直近100件）の
+ * 両方を合わせて重複排除し取得する。パフォーマンスについて: `vocab_words`全件を毎回取得する
+ * わけではなく、いずれもLIMIT句で頭打ちにしている。現状の規模（数百件）ではこれで十分高速であり、
+ * 追加のキャッシュ・専用インデックスは不要と判断した——将来数万件規模まで育った場合は
+ * `vocab_words(created_at desc)`への索引追加（一行の後方互換マイグレーション）で対応できる設計。
+ */
+async function getExistingWords(supabase: SupabaseClient, tagName: string): Promise<string[]> {
+  const [dbWideWords, sameTagWords] = await Promise.all([
+    getDbWideExistingWords(supabase),
+    getSameTagExistingWords(supabase, tagName),
+  ])
+  return Array.from(new Set([...sameTagWords, ...dbWideWords]))
+}
+
+/**
  * 8.1のA→B→C（生成トリガー→Gemini API→generation_batch_itemsへの保存）を実行する。
  * 8.4以降の検証はここでは行わない（validate_batch.tsの責務）。
  * 13.2: contentKind='idiom'のときはprompts/idiom.mdを使う（tagNameパラメータは無視する）。
- * 重複回避の既存サンプルはタグを問わずDB全体から取得する（`getExistingWords`参照）。
+ * 重複回避の既存サンプルは対象タグの単語＋タグを問わずDB全体の単語の両方を取得する
+ * （`getExistingWords`参照）。
  */
 export async function generateVocabBatch(
   params: GenerateVocabBatchParams,
@@ -88,7 +150,7 @@ export async function generateVocabBatch(
   if (batchError) throw batchError
   const batchId = (batch as { id: string }).id
 
-  const existingWords = await getExistingWords(supabase)
+  const existingWords = await getExistingWords(supabase, effectiveTagName)
 
   const prompt =
     contentKind === 'idiom'

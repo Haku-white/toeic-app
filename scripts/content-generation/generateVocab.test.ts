@@ -33,13 +33,42 @@ function makeQueryBuilder(result: MockResult) {
   return builder
 }
 
+/**
+ * `vocab_words`は`getDbWideExistingWords`（`.order().limit()`のみ）と
+ * `getSameTagExistingWords`（`.in(ids).order().limit()`）の2種類のクエリで呼ばれる
+ * （2026-08-12改修）。`.in()`が呼ばれたかどうかで結果を出し分ける。
+ */
+function makeVocabWordsRouter(dbWideResult: MockResult, sameTagResult: MockResult) {
+  return () => {
+    const builder: Record<string, unknown> = {}
+    let usedIn = false
+    builder.select = vi.fn(() => builder)
+    builder.in = vi.fn(() => {
+      usedIn = true
+      return builder
+    })
+    builder.order = vi.fn(() => builder)
+    builder.limit = vi.fn(() => builder)
+    builder.then = (
+      onFulfilled: (value: MockResult) => unknown,
+      onRejected?: (reason: unknown) => unknown,
+    ) => Promise.resolve(usedIn ? sameTagResult : dbWideResult).then(onFulfilled, onRejected)
+    return builder
+  }
+}
+
 describe('generateVocabBatch', () => {
-  it('creates a batch, includes existing DB-wide words (regardless of tag) as dedup context, and stores pending items', async () => {
+  it('creates a batch, includes both same-tag and DB-wide existing words as dedup context, and stores pending items', async () => {
     const fromMock = vi.fn((table: string) => {
       if (table === 'generation_batches') return makeQueryBuilder({ data: { id: 'batch-2' }, error: null })
-      // 20260813改修: 重複回避コンテキストはタグ単位ではなくDB全体のvocab_wordsを直接見る
-      // （vocab_tags/vocab_word_tagsを経由したタグ絞り込みは行わない）。
-      if (table === 'vocab_words') return makeQueryBuilder({ data: [{ word: 'negotiate' }], error: null })
+      if (table === 'vocab_tags') return makeQueryBuilder({ data: { id: 1 }, error: null })
+      if (table === 'vocab_word_tags') return makeQueryBuilder({ data: [{ vocab_word_id: 'w-1' }], error: null })
+      if (table === 'vocab_words') {
+        return makeVocabWordsRouter(
+          { data: [{ word: 'negotiate' }], error: null }, // DB全体（直近100件）
+          { data: [{ word: 'itinerary' }], error: null }, // 同一タグ（直近50件）
+        )()
+      }
       if (table === 'generation_batch_items') return makeQueryBuilder({ data: null, error: null })
       throw new Error(`unexpected table: ${table}`)
     })
@@ -68,7 +97,8 @@ describe('generateVocabBatch', () => {
 
     const promptArg = generateJsonArray.mock.calls[0][0].prompt as string
     expect(promptArg).toContain('【テーマ】\nビジネス')
-    expect(promptArg).toContain('- negotiate')
+    expect(promptArg).toContain('- negotiate') // DB全体サンプル由来
+    expect(promptArg).toContain('- itinerary') // 同一タグサンプル由来
 
     // --modelを指定しない場合、.env(env.GEMINI_MODEL)の値がそのままモデル名として使われること
     expect(generateJsonArray.mock.calls[0][0].model).toBe('gemini-test-model')
@@ -81,10 +111,37 @@ describe('generateVocabBatch', () => {
     ])
   })
 
-  it('uses an empty dedup list when there are no existing vocab_words yet', async () => {
+  it('includes a same-tag word even when it falls outside the DB-wide recent sample (2026-08-12 regression test)', async () => {
+    // 実データで確認した事例の再現: negotiateがDB全体では古い(直近100件に入らない)が、
+    // ビジネスタグ自身の直近50件には含まれる、というケース。
+    const fromMock = vi.fn((table: string) => {
+      if (table === 'generation_batches') return makeQueryBuilder({ data: { id: 'batch-old' }, error: null })
+      if (table === 'vocab_tags') return makeQueryBuilder({ data: { id: 1 }, error: null })
+      if (table === 'vocab_word_tags') return makeQueryBuilder({ data: [{ vocab_word_id: 'w-negotiate' }], error: null })
+      if (table === 'vocab_words') {
+        return makeVocabWordsRouter(
+          { data: [{ word: 'recent-other-tag-word' }], error: null }, // DB全体にはnegotiateは含まれない
+          { data: [{ word: 'negotiate' }], error: null }, // 同一タグには含まれる
+        )()
+      }
+      if (table === 'generation_batch_items') return makeQueryBuilder({ data: null, error: null })
+      throw new Error(`unexpected table: ${table}`)
+    })
+    const supabase = { from: fromMock } as unknown as Parameters<typeof generateVocabBatch>[1]['supabase']
+    const generateJsonArray = vi.fn().mockResolvedValue({ items: [], truncated: false, parseRecovered: false })
+
+    await generateVocabBatch({ tagName: 'ビジネス', count: 1, targetBand: 730 }, { supabase, generateJsonArray })
+
+    const promptArg = generateJsonArray.mock.calls[0][0].prompt as string
+    expect(promptArg).toContain('- negotiate')
+    expect(promptArg).toContain('- recent-other-tag-word')
+  })
+
+  it('uses an empty dedup list when there are no existing vocab_words yet (new tag)', async () => {
     const fromMock = vi.fn((table: string) => {
       if (table === 'generation_batches') return makeQueryBuilder({ data: { id: 'batch-3' }, error: null })
-      if (table === 'vocab_words') return makeQueryBuilder({ data: [], error: null })
+      if (table === 'vocab_tags') return makeQueryBuilder({ data: null, error: null }) // タグ自体がまだ無い
+      if (table === 'vocab_words') return makeQueryBuilder({ data: [], error: null }) // DB全体クエリのみ発生
       if (table === 'generation_batch_items') return makeQueryBuilder({ data: null, error: null })
       throw new Error(`unexpected table: ${table}`)
     })
@@ -104,6 +161,7 @@ describe('generateVocabBatch', () => {
   it('records a note on generation_batches when the Gemini output was truncated (10.6)', async () => {
     const fromMock = vi.fn((table: string) => {
       if (table === 'generation_batches') return makeQueryBuilder({ data: { id: 'batch-trunc' }, error: null })
+      if (table === 'vocab_tags') return makeQueryBuilder({ data: null, error: null })
       if (table === 'vocab_words') return makeQueryBuilder({ data: [], error: null })
       if (table === 'generation_batch_items') return makeQueryBuilder({ data: null, error: null })
       throw new Error(`unexpected table: ${table}`)
@@ -136,11 +194,16 @@ describe('generateVocabBatch', () => {
   })
 
   describe('contentKind="idiom" (13.2)', () => {
-    it('ignores tagName, uses DB-wide dedup context (regardless of tag), and builds the idiom prompt', async () => {
+    it('ignores tagName, uses same-tag + DB-wide dedup context under IDIOM_TAG_NAME, and builds the idiom prompt', async () => {
       const fromMock = vi.fn((table: string) => {
         if (table === 'generation_batches') return makeQueryBuilder({ data: { id: 'batch-4' }, error: null })
+        if (table === 'vocab_tags') return makeQueryBuilder({ data: { id: 9 }, error: null })
+        if (table === 'vocab_word_tags') return makeQueryBuilder({ data: [{ vocab_word_id: 'w-idiom' }], error: null })
         if (table === 'vocab_words') {
-          return makeQueryBuilder({ data: [{ word: 'get the ball rolling' }], error: null })
+          return makeVocabWordsRouter(
+            { data: [], error: null },
+            { data: [{ word: 'get the ball rolling' }], error: null },
+          )()
         }
         if (table === 'generation_batch_items') return makeQueryBuilder({ data: null, error: null })
         throw new Error(`unexpected table: ${table}`)
@@ -167,6 +230,11 @@ describe('generateVocabBatch', () => {
       )
 
       expect(result).toEqual({ batchId: 'batch-4', itemCount: 1, truncated: false })
+
+      // IDIOM_TAG_NAMEでタグ解決が行われたこと
+      const tagsBuilder = fromMock.mock.results.find((_r, i) => fromMock.mock.calls[i][0] === 'vocab_tags')!
+        .value as Record<string, ReturnType<typeof vi.fn>>
+      expect(tagsBuilder.eq).toHaveBeenCalledWith('name', IDIOM_TAG_NAME)
 
       const promptArg = generateJsonArray.mock.calls[0][0].prompt as string
       expect(promptArg).toContain('イディオム（慣用表現）')

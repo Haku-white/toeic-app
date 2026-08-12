@@ -54,6 +54,13 @@
   - **後方互換性の事前確認**: 反映前にファイル内容を再確認し、(1) `grammar_questions`/`vocab_words`への`additional_explanation text`列追加（nullable、デフォルト値なし）、(2) `grammar_question_accuracy_stats`/`vocab_word_again_stats`ビューの新規作成、(3) `content_type` enumへの`'grammar_explanation'`/`'vocab_explanation'`追加、の3種のみで構成されており、既存列の削除・型変更・リネーム、既存enum値の削除、破壊的なDROP文は一切含まれないことを確認した。
   - **反映**: `npx supabase db push`を実行（2026-08-12、日本時間の実施時刻は記録簿としてはコミット時刻を参照）。`upToDate: false`から実行し、`20260811080000_add_additional_explanation.sql`の1件が適用されたことをCLIの出力で確認。
   - **反映後の確認**: `npx supabase migration list`でローカル・クラウドの17件全てが一致することを確認。`npx supabase db query --linked`で(1) `grammar_questions`/`vocab_words`両方に`additional_explanation`列が存在すること、(2) `content_type`のenum値が`vocab`/`grammar`/`grammar_explanation`/`vocab_explanation`の4つになっていること、(3) `grammar_question_accuracy_stats`/`vocab_word_again_stats`の両ビューに対する`select`が正常に実行できること（クラウド側にはまだ`user_grammar_attempts`/`vocab_review_logs`の実データが無いため結果は空だが、エラー無く実行できることを確認——クエリが失敗せず空集合が返る、という点が「正常にクエリできる」の確認内容）、(4) 両ビューに`security_invoker=true`オプションが正しく設定されていること（`pg_class`の`reloptions`を直接確認）、をそれぞれ確認した。
+- 2026-08-12: 語彙生成の重複回避コンテキストを、対象タグの単語（直近50件）＋タグを問わずDB全体の単語（直近100件）の両方を見る形に拡張した（8.3参照）。
+  - **経緯の確認**: 依頼は「DESIGN.md 16章の未決事項」を根拠にしていたが、実際のDESIGN.md（現在は§1〜§12の構成）に該当する未決事項は見つけられなかった。一方でコード（`generateVocab.ts`）を確認したところ、「タグ単位→DB全体」への変更自体は**既に2026-08-10のコミット（`bb1d458`）で実施・push済み**だったことが判明した（関数名も`getExistingWordsForTag`から`getExistingWords`へ改称済み）。ユーザーの記憶と実際の記録に食い違いがあったため、10章・11章での同種の食い違いと同様、ここに正直に記録する。
+  - **それでも実際に検証してみて見つかった別の問題**: 依頼の3番「needs_review発生率が想定通り下がるか、小規模なテストバッチ生成で確認する」を実施したところ、既にDB全体を見ているにもかかわらずローカルDB（159件、うちイディオムの一括バックフィルが直近を占有）でビジネスタグの単語を5件生成し検証したところ、5件中4件が構造チェックの完全一致重複（`negotiate`/`implement`/`accommodate`/`preliminary`）でneeds_reviewになった。原因を調査したところ、これらの単語はDB全体で「作成日時が古い方から数えて上位45件以内」（＝直近100件のサンプルにも入らない）に位置しており、「対象タグが最初に登録された基本的な単語ほど、後から他タグへ大量投入されるほど相対的に古くなり、直近N件という窓から外れる」という、2026-08-10の修正だけでは解決しない別種の問題だと分かった。
+  - **追加の修正**: `getSameTagExistingWords`（新規、`vocab_word_tags`経由で対象タグの単語を直近50件取得——`src/lib/queries/vocab.ts`の`getWordIdsForTag`と同じ2段階クエリパターン）を追加し、`getExistingWords`が`getDbWideExistingWords`（DB全体、直近100件・従来の30から拡大）と合わせて重複排除した結果を返すよう変更。文法側（`generateGrammar.ts`の`existingQuestionSamples`）はカテゴリごとに独立した出題ドメインでクロスカテゴリ重複が起きにくいため対象外とした（判断理由は8.3参照）。
+  - **パフォーマンス**: `vocab_words`全件を毎回取得する設計にはしていない（依頼で懸念されていた点）。DB全体側・同一タグ側ともにLIMIT句（100件・50件）で頭打ちにしており、現状の規模（数百件）では追加のキャッシュ・専用インデックスは不要と判断した。将来的にテーブルが数万件規模まで育った場合は`vocab_words(created_at desc)`への索引追加（一行の後方互換マイグレーション）で対応できる設計とした（8.3参照）。
+  - **効果測定**: ローカルDB（クラウドは触れていない）で、修正前後それぞれ実際にGemini APIを呼び出して5件のテストバッチを生成・検証した（既存の合意済みバッチ生成の延長として実施、コミットはせず検証のみ）。修正前: ビジネスタグ5件中4件がneeds_review（`negotiate`/`implement`/`accommodate`/`preliminary`）。同一タグサンプルのLIMITのみを30→100に広げた中間版でも改善せず（5件中4件のまま、`negotiate`/`obligation`/`facilitate`/`allocate`——いずれもDB全体で上位100件にも入らない古い単語だったため）。`getSameTagExistingWords`導入後: ビジネスタグ5件中0件・日常会話タグ5件中0件がneeds_review（いずれも構造チェックの完全一致重複は0件）。テスト用に生成した4バッチ（コミットはしていない）は検証後にローカルDBから削除済み。
+  - テスト: `npm test`（283件全て成功、282件から+1件——`generateVocab.test.ts`に同一タグサンプルの回帰テストを追加）・`npm run lint`（0件）・`npm run typecheck`（0件）・`npm run typecheck:scripts`（0件）。
 
 ## 1. 要件概要
 
@@ -625,7 +632,17 @@ TOEIC {{target_band}}点レベルの頻出語彙を中心に選定してくだ�
 }
 ```
 
-`{{existing_question_samples}}` / `{{existing_words}}`はDB上の同一カテゴリ・同一タグの直近N件（目安30件）を取得して埋め込む。プロンプト内の除外リストだけでは件数が増えるほど機能しなくなるため、8.4の近似重複検出をセーフティネットとして必ず併用する。
+`{{existing_question_samples}}`（文法）はDB上の同一カテゴリの直近N件（目安30件）を取得して埋め込む。
+
+`{{existing_words}}`（語彙）は**対象タグの単語（直近50件）とタグを問わずDB全体の単語（直近100件）の両方**を取得し、重複排除して埋め込む（`generateVocab.ts`の`getExistingWords`＝`getSameTagExistingWords`＋`getDbWideExistingWords`のマージ）。
+
+- **2026-08-10の修正（クロスタグ重複の解消）**: 当初は文法と同じく同一タグ限定（`getExistingWordsForTag`）だったが、既に別タグでコミット済みの単語をGeminiが再提案し無駄なneeds_reviewを発生させる不具合（ビジネス/日常会話/Part7頻出のバックフィルで`itinerary`等が繰り返し発生）が実データで見つかったため、DB全体を見る形（`getExistingWords`）に修正した。
+- **2026-08-12の修正（タグ自身の基本語が古くなって外れる問題の解消）**: DB全体（直近100件、当初は30件）だけに広げた後も、ローカルDBで実際に検証バッチを生成したところneeds_reviewが5件中4件発生する事例が再現した。原因は「対象タグが最初に登録された基本的な単語（例: ビジネスタグのnegotiate/implement/accommodate等）」が、後から他タグへ大量投入されるほど相対的に古くなり、直近100件という窓からも外れてしまうこと（DB全体を見る2026-08-10の修正だけでは解決しない別種の問題）。対象タグ自身の単語を`getSameTagExistingWords`で別枠で必ず含めることで解消した（`vocab_word_tags`経由の2段階クエリ、`src/lib/queries/vocab.ts`の`getWordIdsForTag`と同じパターン）。修正後、同一条件（ビジネスタグ・5件生成）で検証したところneeds_reviewは0件になった（ローカルDBで実施、詳細は更新履歴参照）。
+- 文法問題はカテゴリごとに独立した出題ドメインでありクロスカテゴリの重複はそもそも起きにくいため、文法側（`{{existing_question_samples}}`）は同一カテゴリ限定のままとした（両者で対称にする必要は無いという判断）。
+
+いずれもプロンプト内の除外リストだけでは件数が増えるほど機能しなくなるため、8.4の近似重複検出をセーフティネットとして必ず併用する。
+
+**パフォーマンスについて**: `getExistingWords`は`vocab_words`全件を毎回取得しているわけではなく、DB全体側は`order('created_at', {ascending: false}).limit(100)`、同一タグ側も`vocab_word_tags`で対象タグのIDに絞った上で`.limit(50)`と、いずれもLIMIT句で頭打ちにしている。バックフィル時点（数百〜低千件規模）はこれで実用上十分に高速であり、追加のキャッシュ層や専用インデックスは導入していない（2026-08-12判断）。`vocab_words.created_at`には現状専用インデックスが無いため、テーブルが数万件規模まで育った場合はソートコストが無視できなくなる可能性がある——その時点で`created_at`への索引追加（`create index on vocab_words(created_at desc)`のような一行の後方互換マイグレーション）で対応できる設計であり、現時点で先回りして対応する必要はないと判断した。
 
 ### 8.4 自動検証（バリデーション）
 
