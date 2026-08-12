@@ -83,6 +83,7 @@
 - 2026-08-12: ドリル・SRSの出題ロジックを読み取り調査（実装変更なし）。VocabReviewはFSRSの`due_at`に基づき正解が続くほど出題頻度が下がる一方、GrammarDrill/MixedDrillは過去の正誤を出題選択に一切反映しない完全ランダム抽選であること、同一セッション内での誤答再出題は3画面とも無いこと、24章（当時の番号）の未決事項「出題順ロジック」の記載はstaleではなく現状のランダム実装を正確に表していることを確認した。DESIGN.mdとコードの間に矛盾は見つからなかった。
 - 2026-08-12: Home画面をclaude.ai Design Canvasの1c案「ロッカースイッチ盤」に基づいてリデザインした（24章）。`src/routes/Home.tsx`を全面書き換え、既存の計器盤デザイントークン（`index.css`）にマッピングして実装。既存`Home.test.tsx`は無改修のまま全件通過。`npm test`（289件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。使い捨てテストユーザー（ローカルSupabase）でブラウザ実地確認済み、検証用スクリプト・テストユーザーは作業後に削除（コミット対象外）。旧「未決事項」章を24→27に繰り下げ。
 - 2026-08-12: 旧`service_role`キー失効前の最終確認を実施（23.5追記、DB・`.env`・キー自体の変更は無し）。`.env`のクラウド統一状態を再確認（URL/キーとも一致）。`.env`クラウド統一（23.6・commit `8394feb`）後に`createSupabaseAdminClient`/`ask-tutor`の再確認が未実施だったため、一時検証スクリプト（作業後削除）で実施——オーバーライド無しの実際の`.env`のもとで`generation_batch_items=500`・`generation_batches=33`（初回確認と一致）、`ask-tutor`はHTTP 200で成功。**その過程でSupabase公式ドキュメント・GitHub issue `supabase/supabase#37648`を調査し、Edge Functionsの予約環境変数`SUPABASE_SERVICE_ROLE_KEY`はレガシーキー専用で新`sb_secret_`キーには自動更新されず、レガシーキーを無効化するとこの変数に依存するEdge Functionが動作しなくなるという実例報告を確認した**。`ask-tutor/index.ts`はこの予約変数を直接参照しているため、`.env`側の移行（23.6）とは無関係に旧キー失効の影響を受ける。**結論: 旧キーの失効は現時点で非推奨**。安全に失効させるには`ask-tutor/index.ts`の新キー対応実装・再デプロイ・再確認が別途必要（ユーザーの確認を要する変更のため未着手）。
+- 2026-08-12: `ask-tutor/index.ts`を予約変数`SUPABASE_SERVICE_ROLE_KEY`依存から非予約名のカスタムシークレット`SB_SECRET_KEY`依存に変更し、クラウドへ再デプロイした（23.7、ユーザーの明示的な承認を得て実施）。当初提案していた「リクエストの`apikey`ヘッダーから鍵を取得する」方式は、フロントエンドが送る`apikey`がanon/publishableキーであり、`increment_tutor_usage`RPC（service_role専用にEXECUTE権限をREVOKE済み）の呼び出しが壊れることが実装前の調査で判明したため採用せず、ユーザーに確認の上で非予約名カスタムシークレット方式に変更した。`supabase secrets set`で`SB_SECRET_KEY`（新`sb_secret_`キーの値）を新規登録→`supabase functions deploy ask-tutor`で再デプロイ→使い捨てテストユーザーによるE2E確認（HTTP 200・`tutor_usage.request_count`が意図通り`1`に増加）まで実施し成功。ローカル開発用`supabase/functions/.env.example`・`.env`（gitignore対象）も同様に更新。**この変更により`ask-tutor`は旧キーに一切依存しなくなり、`scripts/content-generation`（23.6で移行済み）と合わせて、旧`service_role`キーを失効させても問題ないと判断した**（失効操作自体はユーザーがSupabaseダッシュボードで実施）。
 
 ## 1. 要件概要
 
@@ -1016,7 +1017,7 @@ Supabaseの新しいAPIキー体系（`sb_publishable_`＝旧`anon`キーの代�
 |---|---|---|
 | `scripts/content-generation/env.ts` | Node/tsxスクリプト共通の環境変数読み込み（`loadEnv()`） | プロジェクトルート`.env`の`SUPABASE_SERVICE_ROLE_KEY`を`REQUIRED_KEYS`として必須化、`process.env.SUPABASE_SERVICE_ROLE_KEY!`でそのまま文字列として読む。**フォーマットの検証は一切行っていない**（存在確認のみ） |
 | `scripts/content-generation/supabaseAdmin.ts` | `createSupabaseAdminClient()` | `env.SUPABASE_SERVICE_ROLE_KEY`を`createClient(url, key, {...})`の第2引数にそのまま渡す |
-| `supabase/functions/ask-tutor/index.ts`（Deno Edge Function） | ユーザーのJWT検証・レート制限RPC呼び出し用のservice_roleクライアント作成 | `Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!`。**このEdge Function向けの値はSupabaseプラットフォームが自動的に予約変数として注入するもの**で、`supabase secrets set`では設定できない（22.5・更新履歴20260812参照——`SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY`はプラットフォーム予約名のため`secrets set`実行時にスキップされる、既存確認済みの挙動） |
+| `supabase/functions/ask-tutor/index.ts`（Deno Edge Function） | ユーザーのJWT検証・レート制限RPC呼び出し用のservice_roleクライアント作成 | ~~`Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!`。このEdge Function向けの値はSupabaseプラットフォームが自動的に予約変数として注入するもので、`supabase secrets set`では設定できない~~ **2026-08-12、23.7で`Deno.env.get('SB_SECRET_KEY')!`（非予約名のカスタムシークレット）に変更済み**。予約変数は新sb_secret_キー体系に自動追従しないと判明したため（23.5・23.6・23.7参照） |
 | `scripts/content-generation/commit_batch.ts` | コメントのみ（「service_roleキーで実行することが前提」という運用上の注意書き） | コード上の参照なし |
 | `gemini.test.ts` / `generateGrammar.test.ts` / `generateVocab.test.ts` / `generateExplanationEnhancement.test.ts` | `loadEnv`のモック | `SUPABASE_SERVICE_ROLE_KEY: 'service-role-key'`という**ダミー文字列**（実キーではない）をテスト全体で共通して使用 |
 
@@ -1070,6 +1071,20 @@ Supabase公式ドキュメント（`supabase.com/docs/guides/api/api-keys`）を
 - `supabase/functions/ask-tutor/index.ts`は`Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')`（レガシー予約変数）を直接参照しており、この経路は**プロジェクトルートの`.env`とは完全に独立**している（23.6のクラウド統一・sb_secret_移行は`scripts/content-generation`配下のNode CLIのみが対象で、Edge Functionsのランタイムには一切影響しない）。
 
 **結論**: 今回の確認が成功したことは、旧キーがまだ有効な間は何も壊れていないことの確認にしかならず、**旧キーを失効させた場合に`ask-tutor`が動作し続けるかどうかを検証できていない**という23.5冒頭の懸念は、推測ではなく具体的な裏付け（公式ドキュメントの記載・同一メカニズムでの実例報告）のある実害リスクだと判明した。**現時点では旧キーを失効させるべきではない**。安全に失効させるには、`ask-tutor/index.ts`を新キー体系に対応させる実装変更（例: リクエストの`apikey`ヘッダーから値を取得する、またはSupabaseが提供する新しい予約変数名に切り替える）と再デプロイ、その上での再確認が必要——これは`supabase/functions/`の変更・再デプロイを伴うため、着手前にユーザーの確認を要する。
+
+### 23.7 上記への対応（2026-08-12、`SB_SECRET_KEY`カスタムシークレットへの切り替え・再デプロイ実施済み）
+
+23.6で提案した2案（①リクエストの`apikey`ヘッダーから鍵を取得する／②非予約名のカスタムシークレットに切り替える）のうち、以下の理由で①を却下し②を採用した。
+
+- **①（apikeyヘッダー方式）を却下した理由**: `ask-tutor`はフロントエンドから`supabase.functions.invoke()`で呼ばれており、その際自動送信される`apikey`ヘッダーは**anon/publishableキー**（ブラウザ向けの弱い権限キー）である。一方`increment_tutor_usage()`（`20260811070000_create_tutor_usage.sql`）は`anon`/`authenticated`からのEXECUTE権限を意図的に`REVOKE`したservice_role専用のRPCで、`tutor_usage`テーブルもRLSポリシーを作らずservice_roleのRLSバイパスのみに依存する設計（他人の`user_id`を指定してレート制限枠を消費させる嫌がらせを防ぐため）。apikeyヘッダー方式に切り替えると、RPC呼び出しが権限エラーで失敗しAIチューター機能そのものが壊れるため、この関数には適用できないと判断した。
+- **②（採用）**: `supabase secrets set`で非予約名の`SB_SECRET_KEY`シークレットを新規登録し、値は`.env`の`SUPABASE_SERVICE_ROLE_KEY`（新`sb_secret_`キー）と同じものを設定した。`ask-tutor/index.ts`の`createClient()`呼び出しを`Deno.env.get('SB_SECRET_KEY')!`に変更し、予約変数`SUPABASE_SERVICE_ROLE_KEY`への依存を完全に排除した。`GEMINI_API_KEY`と同じ「開発者が明示的に管理する非予約シークレット」のパターンに揃えたことで、Supabase側の予約変数マイグレーション仕様（未確定・issue化されている挙動）に一切依存しなくなった。
+- ローカル開発用の`supabase/functions/.env.example`・`supabase/functions/.env`（gitignore対象、コミットなし）も同様に`SB_SECRET_KEY`に更新（値はローカルSupabaseの`SECRET_KEY`＝固定デモ値、`npx supabase status`で取得可能）。
+- **再デプロイ**: `npx supabase functions deploy ask-tutor --project-ref qpfmssdhbtlbudqburki`で実施（2026-08-12）。
+- **再デプロイ後のE2E確認**: 使い捨てテストユーザー（Admin API作成・確認後削除）で認証込みの実機確認を実施。`ask-tutor`はHTTP 200・`{status: "ok", answer: ...}`を返し、`increment_tutor_usage`RPCも正常動作（`tutor_usage.request_count`を**別クライアントインスタンスで**再取得し`1`であることを確認——前回23.5の確認で`signInWithPassword`とadmin操作を同一クライアントで行いセッションが汚染され`tutor_usage`の読み取りが`null`になっていた検証スクリプト側の不具合を修正済み）。テスト後、ユーザー・`tutor_usage`行（cascade削除）とも削除済み。検証用スクリプトはコミットせず削除。
+- **新旧キーの区別について**: 今回の確認は、Edge Functionが読む鍵を`SB_SECRET_KEY`（新`sb_secret_`値のみを保持、旧レガシーキーの値は一切含まれない）に完全に切り替えた上で行っているため、23.5で残っていた「新キーが実際に使われているのか、旧キーが裏で使われ続けているだけなのか区別できない」という limitation はこの回では**解消されている**——`SB_SECRET_KEY`シークレット自体に旧キーの値を含めていないため、成功した時点で新キー体系のみで動作することが直接証明されている。
+- テスト: Deno Edge Functions向けの自動テストはこのプロジェクトに元々存在しない（`src`/`scripts`配下のみvitest対象）ため、既存の実機E2E確認パターンを踏襲した。`npm test`・`npm run lint`・`npm run typecheck`・`npm run typecheck:scripts`は本変更の対象ファイル（`supabase/functions/`配下）が対象外のため影響なし、念のため実行し全て通過を確認。
+
+**結論（旧キー失効の可否）**: `ask-tutor`はもはや予約変数`SUPABASE_SERVICE_ROLE_KEY`に一切依存していないため、**旧`service_role`キーを失効させても`ask-tutor`が壊れるリスクは解消された**と判断する。`scripts/content-generation`配下のNode CLI（23.6で新`sb_secret_`キーに移行済み）・`ask-tutor`（本節で新`SB_SECRET_KEY`に移行済み）のいずれも、旧キーには一切依存していないことを実機確認済み。他に旧`service_role`キー（レガシーJWT形式の値）を参照している箇所がないか、23.1の洗い出しリストと照合したが新規発見なし。**旧キーを失効させて問題ない状態と判断する**（失効操作自体はユーザーがSupabaseダッシュボードで実施）。
 
 **🔴 発見した問題（想定外）**: ローカル`.env`の`SUPABASE_URL`は`http://127.0.0.1:54321`（ローカルSupabase）を指したままだが、`SUPABASE_SERVICE_ROLE_KEY`はクラウドプロジェクト向けに新規発行された`sb_secret_`キーに置き換わっていた。この**URLとキーの対応不一致**を実際に検証したところ、ローカルSupabaseは見知らぬクラウドキーを**エラーにせず黙って空集合を返す**（`generation_batch_items`が0件、`grammar_categories`のサンプルも空配列）という挙動を確認した——これは`npm run backfill:auto -- --dry-run`のような読み取り専用コマンドが「閾値未満のカテゴリ/タグはありません」という**誤った（実際にはカテゴリ一覧そのものが空で判定できていないだけの）安全そうに見える結果**を返してしまうという、地味だが実害のある落とし穴だった。
 

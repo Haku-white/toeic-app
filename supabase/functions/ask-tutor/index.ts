@@ -108,7 +108,10 @@ Deno.serve(async (req) => {
     return json({ error: 'unauthorized' }, 401)
   }
 
-  const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
+  // 予約変数SUPABASE_SERVICE_ROLE_KEYはレガシーキー専用で新sb_secret_キー体系には
+  // 自動更新されない（DESIGN.md 23.5参照）。旧キー失効後も動作し続けるよう、
+  // `supabase secrets set`で明示的に設定した非予約名のシークレットから読む。
+  const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SB_SECRET_KEY')!)
 
   // クライアントから送られてきたuser_idではなく、JWTから検証したuser_idのみを信用する
   // （なりすまし防止。22.5参照）。
