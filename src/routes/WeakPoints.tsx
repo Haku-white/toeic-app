@@ -13,114 +13,49 @@ import { assignShortcutKeys, useMenuShortcuts } from '../lib/useMenuShortcuts'
 /** 9.6の方針: 正答率70%未満を警告色で強調する */
 const WARNING_THRESHOLD = 0.7
 
+/** r=15.9は2πr≈100となるため、strokeDasharrayに正答率(0-100)をそのまま渡せる（29章のセルフノートと同じ簡略化テクニック）。 */
+const RING_RADIUS = 15.9
+
 function formatPercent(rate: number): string {
   return `${Math.round(rate * 100)}%`
 }
 
-const GAUGE_CENTER_X = 50
-const GAUGE_CENTER_Y = 56
-const GAUGE_ARC_RADIUS = 30
-const GAUGE_TICK_INNER_RADIUS = 36
-const GAUGE_TICK_OUTER_MINOR_RADIUS = 40
-const GAUGE_TICK_OUTER_MAJOR_RADIUS = 43
-const GAUGE_LABEL_RADIUS = 46
-const GAUGE_NEEDLE_RADIUS = 24
-const GAUGE_TICK_FRACTIONS = [0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1]
-const GAUGE_LABELS: { fraction: number; text: string }[] = [
-  { fraction: 0, text: '0' },
-  { fraction: 0.5, text: '50' },
-  { fraction: 1, text: '100' },
-]
-
-function gaugePoint(fraction: number, radius: number) {
-  const angle = Math.PI * fraction
-  return {
-    x: GAUGE_CENTER_X - radius * Math.cos(angle),
-    y: GAUGE_CENTER_Y - radius * Math.sin(angle),
-  }
-}
-
 /**
- * 「計器盤」コンセプトのアナログ針式メーター（DESIGN.md Design Canvas
- * 「Weakness Dashboard Gauges」1a案を移植）。正答率をトラック（neutral-300）に
- * 対する塗り分け＋針で表現する。配色は既存方針を踏襲し2階調（correct/incorrect）の
- * ままとし、1a案の3階調（green/amber/red）は採用しない。針色はStatRowのカード色と
- * 同じロジックで一貫させる（紫は評価色と混同させないため使わない、DESIGN.md 20章参照）。
- * 目盛りはminor/majorの2段階、ラベルは0/50/100の3点のみに間引いている。
+ * 「計器盤」コンセプトのドーナツ型リングメーター（claude.ai Design Canvas
+ * 「弱点分析ダッシュボード再考2」8a案「リングメーター・グリッド型」を移植）。
+ * 正答率をリングの残量塗り分け＋中央%表示で示す。配色は既存方針を踏襲し2階調
+ * （correct/incorrect）のまま（DESIGN.md 20章参照、紫は評価色と混同させないため使わない）。
  */
-function Gauge({ value, isWeak }: { value: number; isWeak: boolean }) {
-  const clamped = Math.max(0, Math.min(1, value))
-  const start = gaugePoint(0, GAUGE_ARC_RADIUS)
-  const end = gaugePoint(1, GAUGE_ARC_RADIUS)
-  const valueEnd = gaugePoint(clamped, GAUGE_ARC_RADIUS)
-  const needleTip = gaugePoint(clamped, GAUGE_NEEDLE_RADIUS)
-  const needleColorClass = isWeak ? 'stroke-incorrect-600' : 'stroke-correct-600'
+function RingGauge({ value, isWeak }: { value: number; isWeak: boolean }) {
+  const pct = Math.round(Math.max(0, Math.min(1, value)) * 100)
+  const arcClass = isWeak ? 'stroke-incorrect-500' : 'stroke-correct-500'
+  const textClass = isWeak ? 'text-incorrect-700' : 'text-correct-700'
 
   return (
-    <svg width="104" height="64" viewBox="0 0 100 62" aria-hidden="true" className="shrink-0">
-      {GAUGE_TICK_FRACTIONS.map((fraction) => {
-        const isMajor = fraction % 0.25 === 0
-        const inner = gaugePoint(fraction, GAUGE_TICK_INNER_RADIUS)
-        const outer = gaugePoint(fraction, isMajor ? GAUGE_TICK_OUTER_MAJOR_RADIUS : GAUGE_TICK_OUTER_MINOR_RADIUS)
-        return (
-          <line
-            key={fraction}
-            x1={inner.x.toFixed(1)}
-            y1={inner.y.toFixed(1)}
-            x2={outer.x.toFixed(1)}
-            y2={outer.y.toFixed(1)}
-            strokeWidth={isMajor ? 1.5 : 1}
-            className={isMajor ? 'stroke-neutral-400' : 'stroke-neutral-300'}
-          />
-        )
-      })}
-      {GAUGE_LABELS.map(({ fraction, text }) => {
-        const pos = gaugePoint(fraction, GAUGE_LABEL_RADIUS)
-        return (
-          <text
-            key={text}
-            x={pos.x.toFixed(1)}
-            y={pos.y.toFixed(1)}
-            fontSize="9"
-            textAnchor="middle"
-            dominantBaseline="middle"
-            className="fill-neutral-400"
-          >
-            {text}
-          </text>
-        )
-      })}
-      <path
-        d={`M${start.x.toFixed(1)} ${start.y.toFixed(1)} A${GAUGE_ARC_RADIUS} ${GAUGE_ARC_RADIUS} 0 0 1 ${end.x.toFixed(1)} ${end.y.toFixed(1)}`}
-        fill="none"
-        strokeWidth="7"
-        strokeLinecap="round"
-        className="stroke-neutral-300"
-      />
-      {clamped > 0 && (
-        <path
-          d={`M${start.x.toFixed(1)} ${start.y.toFixed(1)} A${GAUGE_ARC_RADIUS} ${GAUGE_ARC_RADIUS} 0 0 1 ${valueEnd.x.toFixed(1)} ${valueEnd.y.toFixed(1)}`}
+    <div className="relative h-11 w-11 flex-none">
+      <svg viewBox="0 0 40 40" className="h-11 w-11 -rotate-90" aria-hidden="true">
+        <circle cx="20" cy="20" r={RING_RADIUS} fill="none" strokeWidth="5" className="stroke-neutral-300" />
+        <circle
+          cx="20"
+          cy="20"
+          r={RING_RADIUS}
           fill="none"
-          strokeWidth="7"
+          strokeWidth="5"
           strokeLinecap="round"
-          className={needleColorClass}
+          strokeDasharray={`${pct} 100`}
+          className={arcClass}
         />
-      )}
-      <line
-        x1={GAUGE_CENTER_X}
-        y1={GAUGE_CENTER_Y}
-        x2={needleTip.x.toFixed(1)}
-        y2={needleTip.y.toFixed(1)}
-        strokeWidth="2"
-        strokeLinecap="round"
-        className={needleColorClass}
-      />
-      <circle cx={GAUGE_CENTER_X} cy={GAUGE_CENTER_Y} r="2.5" className="fill-neutral-600" />
-    </svg>
+      </svg>
+      <div
+        className={`absolute inset-0 flex items-center justify-center font-mono font-bold ${textClass} ${pct === 100 ? 'text-[9px]' : 'text-[10px]'}`}
+      >
+        {formatPercent(value)}
+      </div>
+    </div>
   )
 }
 
-function StatRow({
+function GaugeTile({
   label,
   totalAttempts,
   accuracyRate,
@@ -135,32 +70,23 @@ function StatRow({
 }) {
   const isWeak = accuracyRate < WARNING_THRESHOLD
   return (
-    <Link
-      to={to}
-      className={`flex items-center justify-between gap-4 rounded-lg border px-4 py-3 text-sm shadow-sm transition-opacity hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500 ${
-        isWeak ? 'border-incorrect-300 bg-incorrect-50 text-incorrect-900' : 'border-neutral-200 bg-white text-neutral-800'
-      }`}
-    >
-      <span className="flex items-center gap-2">
-        <span className="font-medium">{label}</span>
+    <div className="rounded-lg bg-accent-100 p-1 shadow-[inset_0_2px_3px_rgba(0,0,0,.2),inset_0_-1px_0_rgba(255,255,255,.4)]">
+      <Link
+        to={to}
+        className="flex items-center gap-2.5 rounded-md bg-white px-2.5 py-1.5 shadow-[0_1px_2px_rgba(0,0,0,.05)] transition-transform hover:-translate-y-px focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500"
+      >
+        <RingGauge value={accuracyRate} isWeak={isWeak} />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[12.5px] font-semibold text-neutral-800">{label}</span>
+          <span className="block font-mono text-[9.5px] text-neutral-500">{totalAttempts}問</span>
+        </span>
         {shortcutKey && (
-          <span className="rounded border border-neutral-300 px-1 font-mono text-xs text-neutral-500">
+          <span className="flex h-[19px] w-[19px] flex-none items-center justify-center rounded-md border-b-2 border-neutral-400 bg-neutral-200 font-mono text-[10px] font-bold text-neutral-800">
             {shortcutKey}
           </span>
         )}
-      </span>
-      <span className="flex items-center gap-3">
-        <Gauge value={accuracyRate} isWeak={isWeak} />
-        <span className="flex flex-col items-end">
-          <span
-            className={`font-mono text-base font-semibold tabular-nums ${isWeak ? 'text-incorrect-700' : 'text-correct-700'}`}
-          >
-            {formatPercent(accuracyRate)}
-          </span>
-          <span className="font-mono text-xs tabular-nums text-neutral-500">（{totalAttempts}問）</span>
-        </span>
-      </span>
-    </Link>
+      </Link>
+    </div>
   )
 }
 
@@ -216,62 +142,79 @@ export default function WeakPoints() {
   const vocabStats = vocabQuery.data as VocabTagStat[]
 
   return (
-    <div className="flex min-h-screen flex-col items-center gap-8 bg-neutral-50 px-4 py-12">
-      <h1 className="text-xl font-semibold text-neutral-900">弱点分析ダッシュボード</h1>
+    <div className="flex min-h-screen items-center justify-center bg-neutral-50 px-4 py-12">
+      <div className="relative w-full max-w-2xl rounded-[18px] bg-accent-50 shadow-[0_1px_3px_rgba(0,0,0,.08),0_12px_28px_-14px_rgba(0,0,0,.18)]">
+        {/* パネル四隅のネジ(計器盤モチーフ) */}
+        <span className="absolute left-3 top-3 h-1.5 w-1.5 rounded-full bg-neutral-300" />
+        <span className="absolute right-3 top-3 h-1.5 w-1.5 rounded-full bg-neutral-300" />
+        <span className="absolute bottom-3 left-3 h-1.5 w-1.5 rounded-full bg-neutral-300" />
+        <span className="absolute bottom-3 right-3 h-1.5 w-1.5 rounded-full bg-neutral-300" />
 
-      <div className="grid w-full max-w-4xl gap-8 md:grid-cols-2">
-        <section className="space-y-2">
-          <h2 className="text-sm font-semibold text-neutral-700">文法カテゴリ別正答率</h2>
-          {grammarStats.length === 0 ? (
-            <p className="text-sm text-neutral-500">まだ解答データがありません。</p>
-          ) : (
-            <div className="space-y-2">
-              {grammarStats.map((stat, index) => (
-                <StatRow
-                  key={stat.categoryId}
-                  label={stat.categoryName}
-                  totalAttempts={stat.totalAttempts}
-                  accuracyRate={stat.accuracyRate}
-                  to={`/grammar/${stat.categoryCode}`}
-                  shortcutKey={shortcutItems[index].shortcutKey}
-                />
+        <div className="px-6 pb-7 pt-7 sm:px-7">
+          <h1 className="mb-3.5 text-base font-bold text-neutral-900">弱点分析ダッシュボード</h1>
+
+          <div className="mb-4 flex items-center justify-between rounded-md bg-[repeating-linear-gradient(135deg,var(--color-accent-200)_0px,var(--color-accent-200)_2px,var(--color-accent-100)_2px,var(--color-accent-100)_4px)] px-3 py-1.5 shadow-[inset_0_1px_2px_rgba(0,0,0,.08)]">
+            <span className="font-mono text-[9.5px] font-bold tracking-[0.14em] text-accent-700">WEAKPOINT GAUGES</span>
+            <div className="flex gap-[3px]">
+              {[0, 1, 2, 3, 4].map((i) => (
+                <span key={i} className="h-2.5 w-0.5 bg-accent-300" />
               ))}
             </div>
-          )}
-        </section>
+          </div>
 
-        <section className="space-y-2">
-          <h2 className="text-sm font-semibold text-neutral-700">語彙タグ別正答率</h2>
-          {vocabStats.length === 0 ? (
-            <p className="text-sm text-neutral-500">まだレビューデータがありません。</p>
-          ) : (
-            <div className="space-y-2">
-              {vocabStats.map((stat, index) => (
-                <StatRow
-                  key={stat.tagId}
-                  label={stat.tagName}
-                  totalAttempts={stat.totalReviews}
-                  accuracyRate={stat.accuracyRate}
-                  to={`/vocab/review/${encodeURIComponent(stat.tagCode)}`}
-                  shortcutKey={shortcutItems[grammarStats.length + index].shortcutKey}
-                />
-              ))}
-            </div>
-          )}
-        </section>
+          <section className="mb-5">
+            <h2 className="mb-2 font-mono text-[10px] tracking-[0.1em] text-neutral-500">文法カテゴリ</h2>
+            {grammarStats.length === 0 ? (
+              <p className="text-sm text-neutral-500">まだ解答データがありません。</p>
+            ) : (
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                {grammarStats.map((stat, index) => (
+                  <GaugeTile
+                    key={stat.categoryId}
+                    label={stat.categoryName}
+                    totalAttempts={stat.totalAttempts}
+                    accuracyRate={stat.accuracyRate}
+                    to={`/grammar/${stat.categoryCode}`}
+                    shortcutKey={shortcutItems[index].shortcutKey}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section>
+            <h2 className="mb-2 font-mono text-[10px] tracking-[0.1em] text-neutral-500">語彙タグ</h2>
+            {vocabStats.length === 0 ? (
+              <p className="text-sm text-neutral-500">まだレビューデータがありません。</p>
+            ) : (
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                {vocabStats.map((stat, index) => (
+                  <GaugeTile
+                    key={stat.tagId}
+                    label={stat.tagName}
+                    totalAttempts={stat.totalReviews}
+                    accuracyRate={stat.accuracyRate}
+                    to={`/vocab/review/${encodeURIComponent(stat.tagCode)}`}
+                    shortcutKey={shortcutItems[grammarStats.length + index].shortcutKey}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+
+          <Link
+            to="/"
+            className="mx-auto mt-6 flex w-fit items-center gap-2 text-sm text-neutral-500 underline transition-colors hover:text-accent-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500"
+          >
+            ホームに戻る
+            {shortcutItems[shortcutItems.length - 1]?.shortcutKey && (
+              <span className="rounded border border-neutral-300 px-1 font-mono text-xs text-neutral-500">
+                {shortcutItems[shortcutItems.length - 1]?.shortcutKey}
+              </span>
+            )}
+          </Link>
+        </div>
       </div>
-
-      <Link
-        to="/"
-        className="text-sm text-neutral-500 underline transition-colors hover:text-accent-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500"
-      >
-        ホームに戻る
-        {shortcutItems[shortcutItems.length - 1]?.shortcutKey && (
-          <span className="ml-1 rounded border border-neutral-300 px-1 font-mono text-xs text-neutral-500">
-            {shortcutItems[shortcutItems.length - 1]?.shortcutKey}
-          </span>
-        )}
-      </Link>
     </div>
   )
 }

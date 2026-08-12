@@ -75,16 +75,16 @@ describe('WeakPoints', () => {
 
     const weakGrammarLink = await screen.findByRole('link', { name: /仮定法/ })
     expect(weakGrammarLink).toHaveAttribute('href', '/grammar/subjunctive')
-    expect(weakGrammarLink).toHaveClass('border-incorrect-300')
     expect(weakGrammarLink).toHaveTextContent('33%')
+    expect(weakGrammarLink.querySelector('svg circle:nth-of-type(2)')).toHaveClass('stroke-incorrect-500')
 
     const strongGrammarLink = screen.getByRole('link', { name: /時制/ })
-    expect(strongGrammarLink).not.toHaveClass('border-incorrect-300')
     expect(strongGrammarLink).toHaveTextContent('100%')
+    expect(strongGrammarLink.querySelector('svg circle:nth-of-type(2)')).toHaveClass('stroke-correct-500')
 
     const weakVocabLink = screen.getByRole('link', { name: /Part7頻出/ })
     expect(weakVocabLink).toHaveAttribute('href', '/vocab/review/part7')
-    expect(weakVocabLink).toHaveClass('border-incorrect-300')
+    expect(weakVocabLink.querySelector('svg circle:nth-of-type(2)')).toHaveClass('stroke-incorrect-500')
   })
 
   it('shows an empty-state message per section when there is no data yet', async () => {
