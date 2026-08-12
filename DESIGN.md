@@ -61,6 +61,14 @@
   - **パフォーマンス**: `vocab_words`全件を毎回取得する設計にはしていない（依頼で懸念されていた点）。DB全体側・同一タグ側ともにLIMIT句（100件・50件）で頭打ちにしており、現状の規模（数百件）では追加のキャッシュ・専用インデックスは不要と判断した。将来的にテーブルが数万件規模まで育った場合は`vocab_words(created_at desc)`への索引追加（一行の後方互換マイグレーション）で対応できる設計とした（8.3参照）。
   - **効果測定**: ローカルDB（クラウドは触れていない）で、修正前後それぞれ実際にGemini APIを呼び出して5件のテストバッチを生成・検証した（既存の合意済みバッチ生成の延長として実施、コミットはせず検証のみ）。修正前: ビジネスタグ5件中4件がneeds_review（`negotiate`/`implement`/`accommodate`/`preliminary`）。同一タグサンプルのLIMITのみを30→100に広げた中間版でも改善せず（5件中4件のまま、`negotiate`/`obligation`/`facilitate`/`allocate`——いずれもDB全体で上位100件にも入らない古い単語だったため）。`getSameTagExistingWords`導入後: ビジネスタグ5件中0件・日常会話タグ5件中0件がneeds_review（いずれも構造チェックの完全一致重複は0件）。テスト用に生成した4バッチ（コミットはしていない）は検証後にローカルDBから削除済み。
   - テスト: `npm test`（283件全て成功、282件から+1件——`generateVocab.test.ts`に同一タグサンプルの回帰テストを追加）・`npm run lint`（0件）・`npm run typecheck`（0件）・`npm run typecheck:scripts`（0件）。
+- 2026-08-12: CEFR-J Wordlistを用いた語彙選定候補の調査（21章）を実施。**調査・設計のみ、DB変更・データ投入は無し**。
+  - `openlanguageprofiles/olp-en-cefrj`（CEFR-Jプロジェクト公認GitHubミラー）を実際に取得し、CSV構造（`headword,pos,CEFR,...`、A1〜B2の4レベル、7,798行・ユニーク見出し語6,867）とライセンス条件（引用すれば研究・商用利用無償、著作権はTUFS投野研究室）を確認。Octanove作成のC1/C2補完データ（別ライセンス、CC BY-SA 4.0）も確認した。
+  - ローカルDBの既存語彙159語と実際に突き合わせ、53%（85語）がCEFR-Jと重複、47%（74語）はCEFR-Jに無い独自語（イディオム・句動詞・TOEICビジネス特有語）であることを確認。既存語のCEFRレベル分布はB1/B2が81%を占め、依頼にあった「B1〜B2が目安」という想定を実データで裏付けた。
+  - 候補語数の規模感: B1〜B2に絞ったCEFR-J見出し語4,906語のうち、既存DBに無いものは4,843語。
+  - 取り込み方針案（21.3）・未解決の論点（21.4、複数語フレーズの扱い・ビジネス文脈適合性フィルタ不在など）をDESIGN.mdに記録。実装は次セッションでの別途指示待ち。
+- 2026-08-12: Supabase APIキー新方式（`sb_secret_`）への移行準備調査を実施（23章）。**コード変更・`.env`変更・新キー発行は一切無し、DESIGN.mdへの記録のみ**。
+  - service_roleキーの参照箇所を全て洗い出し（`env.ts`/`supabaseAdmin.ts`/`ask-tutor`Edge Function/テストのモック文字列）、Supabase公式ドキュメントを確認した上で、新旧キーが同一のHTTPヘッダ経由で使われる設計のため、コード側の変更は想定より小さい（`.env`の値を差し替えるだけで変数名変更は不要）と判断した。
+  - 移行手順案（23.3、新キー発行→ローカル動作確認→Edge Function実機確認→旧キー失効）とユーザー側作業（23.4）を記録。Edge Function内部の予約変数の扱い・SDKバージョン対応の2点は公式ドキュメントから完全には断定できず、未確認事項として23.5に明記した。
 
 ## 1. 要件概要
 
@@ -926,7 +934,113 @@ DB全体との近似重複検出（8.4②、既存）に加え、**同一バッ�
 
 ---
 
-## 12. 未決事項 / 次のステップ
+## 21. CEFR-J Wordlistを用いた語彙選定候補の調査【設計案・実装なし】
+
+> **章番号について**: 本来なら12（未決事項）の手前＝13が次の番号だが、コード中のコメントには
+> DESIGN.mdに未反映のまま「13章」（イディオム機能）・「14章」（総合問題/mixedDrill）・
+> 「16章」（vocab_tags code分離）・「17章」（リトライ戦略）・「18.2」（語彙タグ一覧画面）・
+> 「19章」（セルフチェック改訂）・「20章」（弱点ダッシュボードの配色方針）・「22章」
+> （AIチューター機能）・「25章」「26章」（キーボード操作・AskTutorPanel関連）という参照が
+> 既に多数存在する（`grep -rn "章\|[0-9]\.[0-9]" src scripts`で確認済み）。これらの番号は
+> 実装に追いつく形の全面書き直し（10章冒頭・15章の未決事項参照）で使う可能性が高いため、
+> 衝突を避けて21・23を割り当てた（12の直後の13・14ではなく、あえて空き番号まで進めている
+> ——22は前述のとおりAIチューター機能の参照で既に使われているため22も避けた）。
+
+
+現状、語彙は単語選定を含め全てGeminiにゼロから生成させているが、単語の**選定**だけを公開語彙リスト（CEFR-J Wordlist）に委ね、日本語訳・例文・語源解説・追加解説の**生成**は既存パイプラインのまま使う、という組み合わせが可能か調査した。本章は調査・設計のみで、DB変更・データ投入は一切行っていない（次セッションで別途指示があった場合に実装する）。
+
+### 21.1 データソースとライセンス
+
+`openlanguageprofiles/olp-en-cefrj`（GitHub、CEFR-Jプロジェクト公認ミラー）を実際に取得して構造を確認した。
+
+- **利用条件**（同リポジトリREADME原文）: "CEFR-J vocabulary and grammar profile datasets can be used for research and commercial purposes with no charge, provided that you cite the dataset properly. The copyright belongs to Tono Laboratory at TUFS (Tokyo University of Foreign Studies)."
+- **引用表記**（README記載の参照形式をそのまま使う）: "The CEFR-J Wordlist Version 1.5. Compiled by Yukio Tono, Tokyo University of Foreign Studies. Retrieved from http://www.cefr-j.org/download.html on [取得日]."
+- ファイル構成:
+  - `cefrj-vocabulary-profile-1.5.csv`（233KB）: 列は`headword, pos, CEFR, CoreInventory 1, CoreInventory 2, Threshold`。**A1〜B2**の4レベル、7,798行・見出し語ユニーク6,867語（同一語が複数品詞で複数行になる、例: "about"がadverb/prepositionの2行）。末尾3列はごく一部の行にのみ値がある補助的な注記でDB取り込み上は無視して問題ない。
+  - `octanove-vocabulary-profile-c1c2-1.0.csv`（46KB）: CEFR-Jプロジェクトを補完する**Octanove Labs**作成のC1/C2版。列は`headword, pos, CEFR, notes`。2,136行（C1:1,111・C2:1,025）。**ライセンスがCEFR-J本体とは別**（[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)）——取り込む場合は引用表記を別途用意する必要がある。
+  - `cefrj-grammar-profile-20180315.csv`: 文法項目リスト。今回の語彙選定調査の対象外。
+- レベル別内訳（CEFR-J本体、A1〜B2）: A1=1,164 / A2=1,411 / B1=2,446 / B2=2,778。
+- 品詞別内訳（同）: noun=4,091 / adjective=1,494 / verb=1,349 / adverb=552 / pronoun=83 / preposition=76 / determiner=46 / conjunction=37 / number=30 / modal auxiliary=13 / be-verb=10 / interjection=9 / do-verb=5 / have-verb=3 / infinitive-to=1。**determiner/number/pronoun/conjunction/preposition等の機能語**は語彙カード（`vocab_words`）の性質（意味・語源を学ぶコンテンツ単語）にそぐわないため、取り込み時はnoun/verb/adjective/adverbを中心にフィルタする想定。
+- 見出し語には`according to`のような**複数語のフレーズが142件**含まれる（"air conditioning"、"bank account"等の複合名詞が中心で、既存の「イディオム」タグが対象とする慣用表現・句動詞とは性質が異なる）。
+
+### 21.2 既存収録語彙との突き合わせ
+
+ローカルDB（クラウドと同一マイグレーション適用済み）の`vocab_words`（159語、4タグ: ビジネス44・イディオム40・日常会話40・Part7頻出35）とCEFR-J＋Octanove統合リスト（見出し語ユニーク8,653語）を実際に突き合わせた（`comm`コマンドによる集合演算、大小文字を無視した完全一致比較）。
+
+- **既存収録語彙とCEFR-Jの重複**: 159語中85語（約53%）がCEFR-J/Octanoveに存在する一般的な単語。残り74語（約47%）はCEFR-Jに含まれない——内訳は主に(a)複数語のイディオム・句動詞（`across the board`、`burn the midnight oil`、`fill out`等、そもそもCEFR-Jの一般語彙リストの対象外）、(b)TOEICのビジネス文脈に特有の語（`discrepancy`、`expenditure`、`designate`、`contingent`等）で、これらはCEFR-Jのような一般英語学習者向けリストには通常含まれないため、**CEFR-J単独では代替できない**（既存のGeminiゼロ生成を今後も併用する必要がある領域）。
+- **CEFRレベルとTOEICの対応関係**: 既存収録語彙（85語）のうちCEFR-Jに存在するもののCEFRレベル分布は、B2=38語・B1=29語・A2=14語・A1=2語。**約81%がB1〜B2**に集中しており、依頼にあった「B1〜B2あたりが目安」という想定と実データが一致した。TOEIC 730点（既定`target_band`）前後の語彙は概ねCEFR B1〜B2相当という経験則が、少なくとも既存のGemini生成語彙の傾向とは整合している。A1（超基礎語）はTOEIC学習者には易しすぎ、C1/C2（Octanove側）はTOEIC 900点を超えて上級寄りになるため、**主軸はB1〜B2、必要に応じてC1の一部を上位帯として検討**、という方針が妥当と判断した。
+- **候補語数の規模感**: B1〜B2に絞ったCEFR-J見出し語はユニーク4,906語、うち既存DBに無いものは4,843語。これがそのまま「TOEIC学習に適した難易度帯で、まだ収録していない候補語」のおおよその上限規模になる（後述21.3のとおり、機能語除外・ビジネス文脈適合性フィルタでさらに絞り込む前提の粗い数字）。C1レベル（Octanove、1,111語）も上位帯の補完候補として利用可能。
+
+### 21.3 取り込み方針案
+
+既存パイプライン（8章）は「Gemini APIが単語選定から日本語訳・例文まで全て生成する」設計だが、CEFR-Jを使う場合は**単語選定のステップだけを差し替える**。
+
+1. **新規スクリプト**（案）`scripts/content-generation/importCefrjWordlist.ts`: CSVを読み込み、(a) POSフィルタ（noun/verb/adjective/adverbのみ、determiner等の機能語を除外）、(b) レベルフィルタ（既定B1〜B2、CLI引数で上書き可能）、(c) 複数語フレーズの除外可否（案: 既定除外——イディオムタグとは別の枠組みで扱うべきで混同を避けるため）、(d) 既存`vocab_words`との重複除外（word+part_of_speechの完全一致、8.4①の構造チェックと同じキー`wordPosKey`を再利用可能）を順に適用し、「候補語＋CEFRレベル＋POS」のリストを作る。この時点では`generation_batch_items`のような新しいstaging機構は設けず、既存の`generateVocabBatch`が受け取れる形（単語の配列）にそのまま変換して次段に渡す設計とする。
+2. **既存の生成パイプラインとの接続**: `generateVocabBatch`は現状「タグ名＋件数」を受け取りGeminiに単語選定から丸ごと依頼する設計（`buildVocabPrompt`）。CEFR-J由来の候補語を使う場合は、**新しいプロンプト**（案）`prompts/vocab_from_wordlist.md`を追加し、「以下の単語リストの中から、まだ登録されていない語についてカード情報（meaning_ja/example_sentence_en/example_sentence_ja/etymology_note/tags）を生成してください。wordフィールドは指定されたリストの語をそのまま使い、新しい単語を創作しないでください」という指示に変更する。JSON Schema（`VOCAB_JSON_SCHEMA`）自体は変更不要——`word`フィールドの生成源が「Geminiの自由生成」から「指定リストの転記」に変わるだけで、出力構造は同一。
+3. **既存のneeds_review・重複チェックフローとの接続**: 8.4の検証フロー（①構造チェック→②近似重複検出→③はvocabなので対象外）はそのまま使える。むしろCEFR-Jから単語を渡すことで、①のword+part_of_speech完全一致チェックに引っかかる確率がGeminiの自由生成より大幅に下がると見込まれる（21.2の分析どおり、既存収録語彙とCEFR-Jの重複はもともと53%程度で、事前にDB側で重複除外した候補だけを渡すため）。②の近似重複検出（pg_trgm）は引き続きセーフティネットとして機能する。
+4. **引用表記の記載場所**（案）: (a) `README.md`のクレジット節（新設）、(b) `scripts/content-generation/prompts/vocab_from_wordlist.md`冒頭のコメント、(c) 本章（21.1）に一次情報として記載——の3箇所。フロントエンド（学習者向けUI）への表示は必須ではない（CEFR-Jの利用条件は「データセットの引用」を求めているのみで、エンドユーザー向け表示までは要求していないとREADMEから読み取れる）が、将来的にサイトのクレジットページを作る場合はそこにも追記する。
+5. **POSマッピング**: CEFR-Jの`pos`値（`noun`/`verb`/`adjective`/`adverb`が主要4種）は既存`vocab_words.part_of_speech`（自由記述文字列、Geminiが生成する値と同じ語彙）とそのまま一致するため変換不要。`be-verb`/`do-verb`/`have-verb`は`verb`に正規化、`determiner`/`number`/`pronoun`/`conjunction`/`preposition`/`interjection`/`infinitive-to`は取り込み対象外とする案（21.1参照）。
+
+### 21.4 未解決の論点・リスク
+
+- **ビジネス文脈適合性のフィルタが無い**: CEFR-Jは一般英語学習者向けリストであり、TOEICのビジネス文脈での使用頻度は考慮されていない。B1〜B2の4,843語をそのまま候補にすると、TOEICではほぼ出現しない語（日常生活・学校生活寄りの語彙）が相当数混ざる可能性がある。既存タグ（ビジネス/日常会話/Part7頻出）のどれに割り当てるかの判断基準も別途必要——単純にCEFRレベルだけでは決められない。
+- **複数語フレーズ（142件）の扱い**: イディオム/句動詞タグとの境界が曖昧。取り込み対象から一律除外する案としたが、`according to`のような頻出コロケーションを機会損失にする可能性もある——次セッションでの実装判断時に再検討の余地あり。
+- **Octanove（C1/C2）はライセンスが別**: 取り込む場合は引用表記を独立して管理する必要がある（21.1参照）。今回のB1〜B2中心の方針では優先度は低い。
+- **重複判定は`word+part_of_speech`の完全一致のみ**: CEFR-Jの見出し語表記（例: 大文字小文字や"a.m./A.M./am/AM"のような複数表記まとめ）と既存DBの表記揺れがあると見逃す可能性がある。実装時に正規化ルールを詰める必要がある。
+
+---
+
+## 23. Supabase APIキー新方式（sb_secret_）への移行準備【設計案・.env変更なし】
+
+Supabaseの新しいAPIキー体系（`sb_publishable_`＝旧`anon`キーの代替、`sb_secret_`＝旧`service_role`キーの代替）への移行に向けた、コード側の準備調査。本章はDESIGN.mdへの記録のみで、実際の`.env`書き換え・Supabaseダッシュボードでの新規キー発行は行っていない（ユーザー側で実施、23.4参照）。
+
+### 23.1 現状、service_roleキーが参照されている箇所
+
+コードベース全体を検索し、以下の箇所で参照されていることを確認した。
+
+| ファイル | 用途 | 参照方法 |
+|---|---|---|
+| `scripts/content-generation/env.ts` | Node/tsxスクリプト共通の環境変数読み込み（`loadEnv()`） | プロジェクトルート`.env`の`SUPABASE_SERVICE_ROLE_KEY`を`REQUIRED_KEYS`として必須化、`process.env.SUPABASE_SERVICE_ROLE_KEY!`でそのまま文字列として読む。**フォーマットの検証は一切行っていない**（存在確認のみ） |
+| `scripts/content-generation/supabaseAdmin.ts` | `createSupabaseAdminClient()` | `env.SUPABASE_SERVICE_ROLE_KEY`を`createClient(url, key, {...})`の第2引数にそのまま渡す |
+| `supabase/functions/ask-tutor/index.ts`（Deno Edge Function） | ユーザーのJWT検証・レート制限RPC呼び出し用のservice_roleクライアント作成 | `Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!`。**このEdge Function向けの値はSupabaseプラットフォームが自動的に予約変数として注入するもの**で、`supabase secrets set`では設定できない（22.5・更新履歴20260812参照——`SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY`はプラットフォーム予約名のため`secrets set`実行時にスキップされる、既存確認済みの挙動） |
+| `scripts/content-generation/commit_batch.ts` | コメントのみ（「service_roleキーで実行することが前提」という運用上の注意書き） | コード上の参照なし |
+| `gemini.test.ts` / `generateGrammar.test.ts` / `generateVocab.test.ts` / `generateExplanationEnhancement.test.ts` | `loadEnv`のモック | `SUPABASE_SERVICE_ROLE_KEY: 'service-role-key'`という**ダミー文字列**（実キーではない）をテスト全体で共通して使用 |
+
+`src/lib/supabase.ts`（フロントエンド）は`anon`キーのみを使い、service_roleキーには一切触れない（7章のRLS方針どおり、既存の分離設計）。
+
+### 23.2 コード側で変更が必要な箇所の特定
+
+Supabase公式ドキュメント（`supabase.com/docs/guides/api/api-keys`）を確認した限り、**新旧キーは同一のHTTPヘッダ（`apikey`/`Authorization: Bearer`）経由で使われる設計**であり、`createClient(url, key)`の呼び出し方自体を変える必要は無いと判断できる材料が得られた。具体的な変更点は以下の通り、想定より小さい。
+
+1. **`.env`の値のみ変更**（今回はユーザー側作業、23.4参照）: `SUPABASE_SERVICE_ROLE_KEY`の値を、旧JWT形式から新しい`sb_secret_...`形式に置き換える。**変数名自体は変更不要**と判断した——`env.ts`の`REQUIRED_KEYS`・`ScriptEnv`インターフェース・`supabaseAdmin.ts`はいずれも変数名にのみ依存しており、値のフォーマット（JWT vs `sb_secret_`）を一切検査していないため、値を差し替えるだけで動作するはず。変数名を`SUPABASE_SECRET_KEY`のように変える案も検討したが、`env.ts`・`.env`・（もし将来CI/CDを構築する場合の）デプロイ設定など複数箇所を揃って変更する必要が生じ、移行の複雑さが増すだけでメリットが薄いため見送った。
+2. **`env.ts`への軽微な追加（任意、今回は未実装）**: 移行完了の確認をしやすくするため、`loadEnv()`に「値が`sb_secret_`で始まっているか」を`console.warn`で通知する程度の軽いチェックを追加する案がある（エラーで止めるほどの検証は不要——旧JWT形式のキーも当面は`supabase.com`側の設計により共存可能なため、強制はしない）。実装するかどうかは次回の判断とする。
+3. **Edge Function（`ask-tutor`）側の注意点**: Supabase公式ドキュメントで「Edge FunctionsはデフォルトでJWT形式のanon/service_roleキーのみをJWT検証の対象としてサポートしており、新方式のキーを使う場合は`--no-verify-jwt`オプションと自前の認可ロジックが必要になる」という趣旨の記述を確認した。ただし、この記述が指しているのは**Edge Functionへの着信リクエストの認可ヘッダ**（フロントエンドが`supabase.functions.invoke('ask-tutor', ...)`で送る、ユーザー自身のセッションJWT）の検証の話であり、**関数内部で`Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')`から読むプラットフォーム予約変数の値そのもの**（サーバー側でservice_roleクライアントを作るためだけに使っている、`ask-tutor/index.ts`の実際の使い方）とは別の話だと考えられる。ただし公式ドキュメントの記述だけでは完全に断定できなかったため、**実際にダッシュボード側でキーをローテーションした後、`ask-tutor`の呼び出しが従来どおり動作するか（特にJWT検証まわり）を実機で確認する**ことを移行手順に含める（23.3のステップ4）。
+4. **依存パッケージのバージョン**: `package.json`の`@supabase/supabase-js`は`^2.112.2`（本プロジェクトで直近に使用中の最新版に近い）。新方式のキーはHTTPヘッダとして渡されるだけで、SDK側の特別なパース処理は不要と考えられるため、現行バージョンで問題無く動作する可能性が高いと判断したが、公式チェンジログから明示的な対応バージョンの記載は見つけられなかった（23.5に不確定要素として記録）。
+
+### 23.3 移行手順案
+
+1. **（ユーザー側）Supabaseダッシュボードで新しい`sb_secret_`キーを発行する**——既存の`service_role`キーはこの時点では削除しない（公式ドキュメントによれば新旧キーは共存可能）。
+2. **（このセッションでは未実施）ローカル`.env`の`SUPABASE_SERVICE_ROLE_KEY`を新キーの値に置き換える**。変数名は変更しない（23.2参照）。
+3. **ローカルで動作確認**: `npm run backfill:auto -- --dry-run`・`npm run enhance:explanations -- --dry-run`（いずれもservice_roleクライアントでDBを読むだけで書き込みはしない、低リスクな確認コマンド）を実行し、`createSupabaseAdminClient()`が新キーで問題なく認証できることを確認する。問題なければ`npm test`・`npm run lint`・`npm run typecheck:scripts`も実行し、リグレッションが無いことを確認する。
+4. **クラウド側Edge Function（`ask-tutor`）の実機確認**（23.2の3参照）: クラウド側で新キーへのローテーションが完了したタイミングで、認証済みユーザーとして実際に「もっと詳しく聞く」を1回使い、正常に回答が返ることを確認する。ここで問題が出た場合は`--no-verify-jwt`の要否等、Edge Function側の追加設定変更が必要になる可能性がある。
+5. **クラウドSupabaseプロジェクトのバックエンド処理（`scripts/content-generation/`配下のCLIをクラウド向けに実行する場合）でも同様に動作確認**——ただし現状これらのCLIは主にローカルDB向けに実行しており、クラウドへの反映は`db push`（マイグレーション）またはユーザー承認済みの範囲でのバッチ実行時のみのため、優先度は3・4より低い。
+6. **問題が無いことを確認できたら、旧`service_role`キーをSupabaseダッシュボードで失効させる**（ユーザー側作業）。この操作は不可逆（ドキュメント: "Deleting a secret key is irreversible and once done it will be gone forever."）なため、3・4のステップで十分な確認が取れてから実施する。
+
+### 23.4 ユーザー側で必要な作業とタイミング
+
+- **今すぐ可能**: Supabaseダッシュボード（Settings > API Keys）で新しい`sb_secret_`キーを発行する（既存キーはまだ削除しない）。新旧キーは共存できるため、このタイミングに急ぎの制約は無い。
+- **新キー発行後**: 発行した`sb_secret_...`の値を教えていただければ、（別途明示的な指示のもとで）ローカル`.env`の`SUPABASE_SERVICE_ROLE_KEY`を書き換え、23.3のステップ3・4の動作確認を実施する。
+- **動作確認が取れた後**: 旧`service_role`キーの失効はユーザー側で実施（不可逆操作のため、私からは提案するのみで実行はしない）。
+- クラウドSupabaseプロジェクト側で新方式キーへの切り替えに伴う追加設定（Edge Functionsの`--no-verify-jwt`要否等、23.2の3参照）が必要になった場合は、実機確認の結果を見てあらためて相談する。
+
+### 23.5 未確認・要検証の不確定要素
+
+- Edge Function内部の`Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')`（プラットフォーム予約変数）が、プロジェクトが新キー体系に移行した後も同じ変数名・同じ意味で提供され続けるか、公式ドキュメントから完全には断定できなかった（23.2の3参照）。
+- `@supabase/supabase-js@^2.112.2`が新方式キーに正式対応しているかの明示的なバージョン記載は見つけられなかった（23.2の4参照）。実機確認（23.3のステップ3）で problems が出れば、パッケージの更新が必要になる可能性がある。
+
+---
+
+## 24. 未決事項 / 次のステップ
 
 - レビューCLI（`review_batch.ts`）の具体的なUX（承認・却下・その場編集のコマンド設計）
 - 一意性セルフチェックの`confidence`閾値・類似度閾値（0.6, 0.8）の妥当性検証（実データで調整予定）
@@ -935,6 +1049,8 @@ DB全体との近似重複検出（8.4②、既存）に加え、**同一バッ�
 - 弱点ダッシュボードの「警告色」閾値（70%）の妥当性は実データで調整
 - 自動問題生成（10章）・間違いが多い問題への自動解説追加（11章）の定期実行化（cron等）——無人実行時のエラー通知・Gemini APIコスト上限の設計が必要
 - 語彙の30%（11.1）・文法の70%（既存、5章）といった閾値の妥当性は実データで調整予定
-- DESIGN.mdの8章（Gemini APIパイプライン）が実装（13章のイディオム・16章のvocab_tags code分離・17章のリトライ戦略・19章のセルフチェック改訂を含む一連の変更）から大きく取り残されている（10章冒頭「前提として発見した既存実装とのズレ」参照、11章は今回のセッションで実装した範囲のみ記録済み・この取り残し分とは別）。実装に追いつく形での全面的な書き直しが必要
+- DESIGN.mdの8章（Gemini APIパイプライン）が実装（13章のイディオム・16章のvocab_tags code分離・17章のリトライ戦略・19章のセルフチェック改訂を含む一連の変更）から大きく取り残されている（10章冒頭「前提として発見した既存実装とのズレ」参照、11章は今回のセッションで実装した範囲のみ記録済み・この取り残し分とは別）。実装に追いつく形での全面的な書き直しが必要——**この全面書き直しの際に、コード中で未反映のまま参照されている章番号（13, 14, 16, 17, 18.2, 19, 20, 22, 25, 26）と、21章・23章として今回割り当てた番号の整合を取り直す必要がある**（21章冒頭の注記参照）
+- CEFR-J Wordlist（21章）の取り込み実装: 21.3の方針案どおり進めるかの最終判断、複数語フレーズ（142件）の扱い、ビジネス文脈適合性フィルタの設計が未着手
+- Supabase APIキー新方式への移行（23章）: ユーザー側での新`sb_secret_`キー発行を待って23.3の手順を実施
 
 
