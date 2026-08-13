@@ -4,8 +4,8 @@ import type { Session } from '@supabase/supabase-js'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { getGrammarDrillData, submitGrammarAttempt } from '../lib/queries/grammar'
 import { useGrammarSessionStore } from '../stores/grammarSessionStore'
-import AskTutorPanel from '../components/AskTutorPanel'
 import SessionSummary, { SessionSummaryAction } from '../components/SessionSummary'
+import QuestionCard, { QuestionProgressBar } from '../components/QuestionCard'
 
 const CHOICE_LABELS = ['1', '2', '3', '4']
 const COMPLETE_SCREEN_LINK_TO = '/grammar'
@@ -158,76 +158,27 @@ export default function GrammarDrill() {
     )
   }
 
-  const isAnswered = selectedIndex !== null
-
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-neutral-50 px-4">
-      <p className="text-sm text-neutral-500">
-        {data!.category.nameJa} —{' '}
-        <span className="font-mono tabular-nums text-accent-700">
-          {currentIndex + 1} / {questions.length}
-        </span>
-        （{answeredCount}問中{correctCount}問正解）
-      </p>
+      <QuestionProgressBar
+        current={currentIndex + 1}
+        total={questions.length}
+        caption={`${data!.category.nameJa} — ${answeredCount}問中${correctCount}問正解`}
+      />
 
-      <div className="w-full max-w-md rounded-lg border border-neutral-200 bg-white p-8 shadow-sm">
-        <p className="font-serif text-base text-neutral-900">{currentQuestion!.questionText}</p>
-
-        <div className="mt-6 space-y-2">
-          {currentQuestion!.choices.map((choice, index) => {
-            const isCorrectChoice = index === currentQuestion!.correctIndex
-            const isSelectedChoice = index === selectedIndex
-
-            let stateClasses = 'border-neutral-300 hover:border-accent-300 hover:bg-neutral-50'
-            if (isAnswered && isCorrectChoice) {
-              stateClasses = 'border-correct-600 bg-correct-50 text-correct-900'
-            } else if (isAnswered && isSelectedChoice && !isCorrectChoice) {
-              stateClasses = 'border-incorrect-600 bg-incorrect-50 text-incorrect-900'
-            }
-
-            return (
-              <button
-                key={index}
-                disabled={isAnswered}
-                onClick={() => handleAnswer(index)}
-                className={`flex w-full items-center gap-2 rounded border px-3 py-2 text-left text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500 disabled:cursor-default ${stateClasses}`}
-              >
-                <span className="font-mono font-semibold text-neutral-400">{CHOICE_LABELS[index]}</span>{' '}
-                <span>{choice}</span>
-              </button>
-            )
-          })}
-        </div>
-
-        {isAnswered && (
-          <div className="mt-4 space-y-3">
-            {currentQuestion!.explanation && (
-              <p className="rounded border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-700">
-                {currentQuestion!.explanation}
-              </p>
-            )}
-            {currentQuestion!.additionalExplanation && (
-              <div className="rounded border border-incorrect-200 bg-incorrect-50 px-3 py-2">
-                <p className="text-xs font-medium text-incorrect-700">よくある間違いのポイント</p>
-                <p className="mt-1 text-sm text-neutral-700">{currentQuestion!.additionalExplanation}</p>
-              </div>
-            )}
-            <AskTutorPanel
-              questionText={currentQuestion!.questionText}
-              choices={currentQuestion!.choices}
-              correctAnswer={currentQuestion!.choices[currentQuestion!.correctIndex]}
-              explanation={currentQuestion!.explanation ?? ''}
-              onFocusChange={setIsAskingTutor}
-            />
-            <button
-              onClick={advance}
-              className="w-full rounded bg-accent-600 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500"
-            >
-              {currentIndex + 1 >= questions.length ? '結果を見る' : '次の問題へ'}
-            </button>
-          </div>
-        )}
-      </div>
+      <QuestionCard
+        panelLabel="GRAMMAR DRILL"
+        questionText={currentQuestion!.questionText}
+        choices={currentQuestion!.choices}
+        correctIndex={currentQuestion!.correctIndex}
+        selectedIndex={selectedIndex}
+        onSelect={handleAnswer}
+        explanation={currentQuestion!.explanation}
+        additionalExplanation={currentQuestion!.additionalExplanation}
+        onAdvance={advance}
+        isLastQuestion={currentIndex + 1 >= questions.length}
+        onAskTutorFocusChange={setIsAskingTutor}
+      />
 
       <p className="font-mono text-xs text-neutral-400">
         {isAskingTutor ? 'Enter: 質問を送信 / Shift+Enter: 改行 / Ctrl+Enter: 次へ' : '1〜4: 選択 / Enter: 次へ'}

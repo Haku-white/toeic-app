@@ -6,8 +6,8 @@ import { submitGrammarAttempt } from '../lib/queries/grammar'
 import { submitVocabReview } from '../lib/queries/vocab'
 import { getMixedDrillQuestions, mapMixedDrillAnswerToRating, type MixedQuestion } from '../lib/queries/mixedDrill'
 import { useMixedDrillSessionStore } from '../stores/mixedDrillSessionStore'
-import AskTutorPanel from '../components/AskTutorPanel'
 import SessionSummary, { SessionSummaryAction } from '../components/SessionSummary'
+import QuestionCard, { QuestionProgressBar } from '../components/QuestionCard'
 
 const CHOICE_LABELS = ['1', '2', '3', '4']
 const GRAMMAR_COUNT = 5
@@ -177,79 +177,30 @@ export default function MixedDrill() {
     )
   }
 
-  const isAnswered = selectedIndex !== null
   const question = currentQuestion!
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-neutral-50 px-4">
-      <p className="text-sm text-neutral-500">
-        <span className="font-mono tabular-nums text-accent-700">
-          {currentIndex + 1} / {questions.length}
-        </span>
-        （文法{grammarCorrect}/{grammarTotal}・語彙{vocabCorrect}/{vocabTotal}）
-      </p>
+      <QuestionProgressBar
+        current={currentIndex + 1}
+        total={questions.length}
+        caption={`文法${grammarCorrect}/${grammarTotal}・語彙${vocabCorrect}/${vocabTotal}`}
+      />
 
-      <div className="w-full max-w-md rounded-lg border border-neutral-200 bg-white p-8 shadow-sm">
-        <span className="text-xs font-medium text-neutral-400">
-          {question.kind === 'grammar' ? '文法' : '語彙'}
-        </span>
-        <p className="mt-1 font-serif text-base text-neutral-900">{question.questionText}</p>
-
-        <div className="mt-6 space-y-2">
-          {question.choices.map((choice, index) => {
-            const isCorrectChoice = index === question.correctIndex
-            const isSelectedChoice = index === selectedIndex
-
-            let stateClasses = 'border-neutral-300 hover:border-accent-300 hover:bg-neutral-50'
-            if (isAnswered && isCorrectChoice) {
-              stateClasses = 'border-correct-600 bg-correct-50 text-correct-900'
-            } else if (isAnswered && isSelectedChoice && !isCorrectChoice) {
-              stateClasses = 'border-incorrect-600 bg-incorrect-50 text-incorrect-900'
-            }
-
-            return (
-              <button
-                key={index}
-                disabled={isAnswered}
-                onClick={() => handleAnswer(index, question)}
-                className={`flex w-full items-center gap-2 rounded border px-3 py-2 text-left text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500 disabled:cursor-default ${stateClasses}`}
-              >
-                <span className="font-mono font-semibold text-neutral-400">{CHOICE_LABELS[index]}</span>{' '}
-                <span>{choice}</span>
-              </button>
-            )
-          })}
-        </div>
-
-        {isAnswered && (
-          <div className="mt-4 space-y-3">
-            {question.explanation && (
-              <p className="rounded border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-700">
-                {question.explanation}
-              </p>
-            )}
-            {question.additionalExplanation && (
-              <div className="rounded border border-incorrect-200 bg-incorrect-50 px-3 py-2">
-                <p className="text-xs font-medium text-incorrect-700">よくある間違いのポイント</p>
-                <p className="mt-1 text-sm text-neutral-700">{question.additionalExplanation}</p>
-              </div>
-            )}
-            <AskTutorPanel
-              questionText={question.questionText}
-              choices={question.choices}
-              correctAnswer={question.choices[question.correctIndex]}
-              explanation={question.explanation ?? ''}
-              onFocusChange={setIsAskingTutor}
-            />
-            <button
-              onClick={advance}
-              className="w-full rounded bg-accent-600 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500"
-            >
-              {currentIndex + 1 >= questions.length ? '結果を見る' : '次の問題へ'}
-            </button>
-          </div>
-        )}
-      </div>
+      <QuestionCard
+        panelLabel="MIXED DRILL"
+        kindLabel={question.kind === 'grammar' ? '文法' : '語彙'}
+        questionText={question.questionText}
+        choices={question.choices}
+        correctIndex={question.correctIndex}
+        selectedIndex={selectedIndex}
+        onSelect={(index) => handleAnswer(index, question)}
+        explanation={question.explanation}
+        additionalExplanation={question.additionalExplanation}
+        onAdvance={advance}
+        isLastQuestion={currentIndex + 1 >= questions.length}
+        onAskTutorFocusChange={setIsAskingTutor}
+      />
 
       <p className="font-mono text-xs text-neutral-400">
         {isAskingTutor ? 'Enter: 質問を送信 / Shift+Enter: 改行 / Ctrl+Enter: 次へ' : '1〜4: 選択 / Enter: 次へ'}

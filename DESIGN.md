@@ -94,6 +94,10 @@
   - **データソース**: `user_vocab_progress`単独テーブルの集計のみで完結するため、新規DBビューは作らず`getVocabProgressStats`（`src/lib/queries/vocab.ts`）でクライアント側集計する設計にした（31.2参照）。
   - 新規: `VocabProgressHub.test.tsx`（5件）、`vocab.test.ts`に`getVocabProgressStats`/`applySessionTransitions`（計7件）。更新: `VocabReview.test.tsx`（+2件）、`VocabTagList.test.tsx`（+2件、`loader`にセッションを追加）。`npm test`（318件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。
   - ローカルSupabase（159語）に使い捨てテストユーザーを作成し、完全版（実データ147/3/7/2・期日到来5件・定着率6%が一致）・簡易版（3語のみのセッションで新規0(−3)/学習中3(+3)/復習156の差分表示が一致）の両方をブラウザで実地確認した。検証用スクリプト・テストユーザーは作業後に削除済み（コミット対象外）。**モバイル表示（390×844）は今回のブラウザ自動化環境のウィンドウリサイズ制約により未確認**——コード上は既存の390px確認済み画面と同じ余白設計を踏襲しているが、実ビューポートでの確認は持ち越し（31.5参照）。検証中、キーボード自動操作ツールでキー入力を間隔なく連続送出すると`VocabReview`の既存キーハンドラが古い`currentCard`を参照し続ける（実装は無改修、既存コードの挙動）ことを発見し、以降は実時間の待機を挟む方式に切り替えた（31.5参照）。
+- 2026-08-13: GrammarDrill/MixedDrillの回答画面（設問+4択部分）を計器盤デザインにリデザインした（32章、新設）。セッション完了後の`SessionSummary`は28章で対応済みのため今回の対象外。該当するclaude.ai Design Canvasの原案は存在しなかった（ユーザーに確認済み）ため、既存の計器盤コンポーネント群（Home/SessionSummary/GrammarCategories/WeakPoints/VocabProgressHub）から直接コードで構図を起こした。
+  - 両画面でverbatimに重複していた設問カード・選択肢ボタン・状態分岐ロジック・解説/警告/AskTutorPanel/次へボタンのブロックを新設`src/components/QuestionCard.tsx`（+進捗の小型計器`QuestionProgressBar`）に抽出した。パネルはアイボリー系（暗色パネルは長文読解タスクの可読性を落とすため不採用）、リングゲージ/LCD統計パネルは持ち込まず（1問+4択には集計すべき統計値が無いため）、正誤フィードバックは行全体の色分けを維持（4択のリアルタイム比較にはSessionSummary等の「装飾のみ色分け」方針は不向きと判断）しつつ未選択・不正解の2択に新規の減光分岐を追加した。
+  - 正誤の状態表示メカニズム自体は変更していないため、既存の`GrammarDrill.test.tsx`/`MixedDrill.test.tsx`は無改修で全件通過。新規`QuestionCard.test.tsx`を9件追加。`npm test`（327件、318件から+9件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。
+  - ローカルSupabaseの使い捨てテストユーザーでGrammarDrill/MixedDrillの表示・正誤色分け・キーボード操作（1〜4/Enter/`?`）・セッション完了画面への遷移を実地確認した（検証用スクリプト・テストユーザーは作業後削除、コミット対象外）。モバイル表示は31.5と同じ環境制約により今回も未確認。
 
 ## 1. 要件概要
 
@@ -1280,6 +1284,35 @@ claude.ai Design Canvas「TOEIC-app ホーム画面リデザイン」プロジ�
   - **検証中に発見した副作用（実装は変更していない、テスト手法上の注意点として記録）**: キーボード操作の自動化ツールで「Enter」→評価キーを間を空けず連続20回送出したところ、`isRevealed`/`mutation.isPending`の状態更新がReactの再描画に反映される前に後続のキーイベントが処理され、`handleRate`のクロージャが古い`currentCard`を参照し続ける挙動を確認した（結果として20回の評価が同一の1語に対して送信された）。これはこのプロジェクトの既存の`VocabReview`キーボードハンドラの挙動であり、`VocabProgressHub`固有の不具合ではない。人間の入力速度では起こり得ないタイミング依存の事象のため、今回はコード修正の対象にしなかったが、今後キーボード操作の自動テスト・自動操作を行う際は、各キー入力の間に実時間の待機を挟むこと（本章の検証はこの方式に切り替えて実施した）。
   - 検証用スクリプト（使い捨てユーザー作成・データ投入用の一時ファイル）・テストユーザー本体はいずれも作業後に削除済み（コミット対象外）。
   - **モバイル表示（390×844）は今回未確認**: ブラウザ自動化環境のウィンドウが1280×752に固定されており、`resize_window`で390×844を指定しても実際のビューポート（`window.innerWidth`）が変化しなかった（新規タブでも同様）。コード上は`w-full max-w-md`・flex/gapベースの余白設計で、既に390px幅で確認済みの`WeakPoints`/`SessionSummary`と同じレイアウト方針を踏襲しているため大きな崩れは想定しにくいが、実機・実ビューポートでの確認はできていない。次回、環境のウィンドウリサイズ制約が外れた際、または実ブラウザでの確認時に追って実施が必要。
+
+---
+
+## 32. ドリル回答画面（GrammarDrill/MixedDrill）の計器盤リデザインと`QuestionCard`の新設
+
+`GrammarDrill.tsx`/`MixedDrill.tsx`の「設問に回答している間」の画面（セッション完了後の`SessionSummary`は28章で既にリデザイン済み、今回の対象外）を、他画面（Home/GrammarCategories/WeakPoints/SessionSummary/VocabProgressHub）で確立済みの計器盤トークン・意匠にそろえてリデザインした。このデザインにはclaude.ai Design Canvasの原案は存在せず（ユーザーに確認済み・空）、既存の計器盤コンポーネント群から直接コードで構図を起こした。
+
+### 32.1 検討した構図と採用理由
+
+- 既存の暗色パネル（Home/GrammarCategories）は短いラベルのナビ・グリッド画面向けであり、本画面は長文の設問+4択という「読んで比較する」高密度テキストのタスクのため、可読性を優先してアイボリーパネル（SessionSummary/WeakPoints/VocabProgressHubと同じ`rounded-[18px] bg-neutral-50`+四隅ネジ+ヘアラインヘッダー）を採用した。
+- リングゲージ・LCDパネル等の「ダッシュボード」系モチーフは意図的に持ち込まなかった。集計すべき少数の統計値ではなく1問+4択という構造のため、パネル外装（ネジ・ヘッダーバー）と選択肢のキーキャップ風装飾のみに留める軽量な適用とした。
+- 正誤フィードバックは、SessionSummary/GrammarCategories/WeakPointsで確立した「数値はneutral固定・装飾要素のみ色分け」方針をそのまま持ち込まず、選択肢行全体の色分け（border/bg/text）を維持した。理由: この画面はダッシュボードの集計値1個を一目で読む用途ではなく、4択を同時に見比べて正誤を即座に判別する必要があるリアルタイムフィードバックのため、装飾ドット1つに縮小すると視認性が落ちると判断した。既存の`border-correct-600`/`border-incorrect-600`はそのままテスト互換のため維持し、未選択・不正解の残り2択には新たに減光した第4分岐（`border-neutral-100 bg-neutral-50 text-neutral-400 shadow-none`）を追加して視線を該当2行に絞った。
+- 進捗表示（{index+1}/{total}）は、GrammarCategories/SessionSummaryの進捗バーと同じ意匠（LCD風の分数チップ+塗り分けバー）の小型計器（`QuestionProgressBar`）に置き換えた。
+
+### 32.2 共通コンポーネント`QuestionCard`の新設
+
+GrammarDrill.tsx/MixedDrill.tsxでverbatimに重複していた設問カード・選択肢・`stateClasses`分岐・解説/警告/AskTutorPanel/次へボタンのブロックを`src/components/QuestionCard.tsx`に抽出した。MixedDrillの`kind`バッジは`kindLabel?`propとして扱い、コンポーネント内部でドリル種別（`GrammarQuestion`/`MixedQuestion`型）による分岐は一切行っていない。同ファイルに進捗の小型計器`QuestionProgressBar`も切り出した。選択肢ラベル定数`CHOICE_LABELS`は当初`QuestionCard.tsx`から単一ソースとしてexportする計画だったが、`react-refresh/only-export-components`のlint警告（コンポーネント以外の値をコンポーネントと同じファイルからexportするとFast Refreshの境界が壊れる）が出たため、各ルートファイルにローカル定義のまま残した（4要素の静的配列を1ファイルにexportする価値より、lintのクリーンな0件維持を優先した）。
+
+### 32.3 テスト・検証
+
+- 新規`src/components/QuestionCard.tsx`+`src/components/QuestionCard.test.tsx`（9件、アクセシブルネームの連結・未回答/回答済みの各状態クラス・減光分岐・`kindLabel`有無・`explanation`/`additionalExplanation`の条件表示・`isLastQuestion`によるボタン文言切り替え・`AskTutorPanel`フォーカス連携を検証）。
+- `GrammarDrill.tsx`/`MixedDrill.tsx`は正誤表示メカニズム自体を変更していないため、既存の`GrammarDrill.test.tsx`/`MixedDrill.test.tsx`は無改修のまま全件通過した（想定どおり、WeakPoints 30.3のようなアサーション更新は不要だった）。
+- 実装時に1点、計画から変更した点: `CHOICE_LABELS`定数を`QuestionCard.tsx`から単一ソースとしてexportする計画だったが、`react-refresh/only-export-components`のlint警告（コンポーネント以外の値をコンポーネントと同じファイルからexportするとFast Refreshの境界が壊れる）が出たため、各ルートファイルにローカル定義のまま残した（32.2参照）。
+- `npm test`（327件、318件から+9件）・`npm run lint`（0件）・`npm run typecheck`（0件）、いずれも通過。
+- **ブラウザでの実地確認**: ローカルSupabase（文法347問・語彙159語）に使い捨てテストユーザーを作成し、以下を確認した。
+  - GrammarDrill（`/grammar/tense`）: パネル外装（四隅ネジ・`GRAMMAR DRILL`ヘアラインヘッダー）・進捗の小型計器（LCD分数チップ+塗り分けバー、`時制 — N問中M問正解`キャプション）・キーキャップ風選択肢の表示を確認。誤答（1: took）を選んだところ、正解（3: will take）が緑・選択した誤答が赤・残りの未選択2択（2, 4）が減光した表示になることを確認。解説ボックス（「解説」キャプション付き）・ベゼル型「次の問題へ」ボタンの表示、3問目まで進めてセッション完了画面（無改修の`SessionSummary`、正答率67%・かかった時間1:26）へ正しく遷移することを確認。
+  - MixedDrill（`/mixed-drill`）: `MIXED DRILL`ヘッダー・`文法`kindバッジ・進捗キャプション（`文法X/Y・語彙X/Y`の2ドメイン内訳）の表示を確認。正解（2: will be completed）を選んで緑色表示になること、`?`ショートカットで`AskTutorPanel`が開きキーボードヒントが「Enter: 質問を送信 / Shift+Enter: 改行 / Ctrl+Enter: 次へ」に切り替わることを確認。
+  - 検証用スクリプト（使い捨てユーザー作成用の一時ファイル）・テストユーザー本体はいずれも作業後に削除済み（コミット対象外）。
+  - **モバイル表示（390×844）は今回も未確認**: 31.5で記録した同じ制約（ブラウザ自動化環境のウィンドウが1280×752に固定され、`resize_window`を呼んでも`window.innerWidth`が変化しない）が本セッションでも再現した。コード上は既存の390px確認済み画面（WeakPoints/SessionSummary/VocabProgressHub）と同じ`w-full max-w-md`・flex/gapベースの余白設計を踏襲しているが、実ビューポートでの確認は持ち越し。
 
 ---
 
