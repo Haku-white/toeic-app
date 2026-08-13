@@ -88,6 +88,12 @@
 - 2026-08-12: Home画面のヘッダーを、同Design Canvasの5a案「夜間飛行型」に基づいて改修した（24.4追記）。1cの構成（四隅のネジ・`CONTROL PANEL`ヘッダー・ロッカースイッチ行・ログアウト）は維持し、最上部の「ログイン成功」表示のみ、夜の地球を見下ろす暗色バナー（地球のリム光・街の光・上昇する破線トレース+航空機マーカー）に差し替えた。実装中にTailwind v4の`rotate-*`任意値記法の落とし穴（符号はブラケット内部`rotate-[-24deg]`に置く必要があり、`-rotate-[24deg]`は無効なクラスとして静かに無視される。またv4の`rotate`は`transform`ではなくCSS標準の独立した`rotate`プロパティとして出力される）を発見・記録した。`npm test`（300件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。一時的な非認証プレビュールートでブラウザ実地確認済み（確認後に削除、コミット対象外）。
 - 2026-08-12: 文法カテゴリ画面（`src/routes/GrammarCategories.tsx`）を、同Design Canvasの6a案「夜景バナー全面化+2列」に基づいてリデザインした（29章、新設）。1c/5aの計器盤モチーフを継続しつつ、パネル全体を夜景（消失点から伸びる遠近グリッド+街明かり）の暗色背景にし、9カテゴリを2列（最後の1件のみ全幅）で密度高く配置。各カテゴリ行に正答率の進捗バーを追加したため、`getGrammarCategoryStats`（`weakPoints.ts`、既存関数を再利用）を新たに呼び出すようになり、ルートに`loader: requireSession`が既にあった前提を活かして`useLoaderData`でuserIdを取得する構成に変更した。`user_grammar_category_stats`ビューは未挑戦カテゴリの行を返さないため、`getGrammarCategories`の全件とマージし、未挑戦カテゴリは0%ではなく「—」表示にして「挑戦して0点だった」と誤解されないようにした。**ユーザー指定の配色調整**: デザイン原案の各カテゴリ行の紫色ランプ（`oklch(60% .14 300)`）は、ユーザーの指示により薄い黄色（`oklch(85% .14 95)`）に変更した。`GrammarCategories.test.tsx`にloaderと`getGrammarCategoryStats`モックを追加（既存3件は無改修で通過、正答率あり/未挑戦の2ケースを新規追加）。`npm test`（302件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。ローカルSupabaseに使い捨てテストユーザーを作成し、未挑戦（—表示）・1カテゴリ挑戦後（33%表示・進捗バー点灯）の両状態をブラウザで実地確認済み。検証用スクリプト・テストユーザーは作業後に削除（コミット対象外）。
 - 2026-08-12: 弱点分析ダッシュボード（`src/routes/WeakPoints.tsx`）を、同Design Canvasの8a案「リングメーター・グリッド型」に基づいてリデザインした（30章、新設）。従来のアナログ針式半円ゲージ+2カラム独立パネル（`max-w-4xl`で文法/語彙を横並び）から、1c/5a/6aと同じ計器盤トーンの単一アイボリーパネル1枚に統合し、ドーナツ型リングゲージ（中央に%表示、`r=15.9`で`strokeDasharray`に正答率をそのまま渡せる簡略化テクニックを利用）を2列グリッドで並べる構成に作り直した。「文法カテゴリ」「語彙タグ」の見出し・弱い順ソート・連番ショートカット・戻るリンクの挙動は既存のまま変更していない。行単位の警告色強調（`border-incorrect-300`の赤枠+背景）は廃止し、リング自体の色（`stroke-incorrect-500`/`stroke-correct-500`）に警告シグナルを一本化した——`WeakPoints.test.tsx`のクラス検証もリンクの`border-incorrect-300`からリング`<circle>`要素の`stroke-*`クラスへ変更。`npm test`（302件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。ローカルSupabaseに使い捨てテストユーザーを作成し、文法2件・語彙2件（0%/30%/67%/100%の4パターン）を実際に解答・レビューして生成した実データでブラウザ確認済み。**ブラウザ検証中のインシデント**: マウスクリックでログインフォームを操作した際、以前のビューポートサイズを前提にした座標が実際の画面とずれ、「Googleでログイン」ボタンを誤クリックしてユーザー本人の実Googleアカウント選択画面に遷移してしまった。いずれのアカウントも選択・認証せず即座に離脱し実害は無かったが、以降はマウス座標に依存せず`document.getElementById`+ネイティブsetter経由でフォーム値を設定してから送信する方式に切り替えた（本セッション以降、この種のログインフォーム操作は座標クリックではなくJS直接操作を優先する）。検証用スクリプト・テストユーザーは作業後に削除（コミット対象外）。
+- 2026-08-13: 語彙の習熟度・復習状況（FSRSの状態分布・安定度・期日到来枚数）を可視化するSRS進捗ハブ`VocabProgressHub`を新設した（31章、新設）。当初の依頼は「claude.ai Design Canvas 2A案『習熟度メーター・ハブ』」の実装だったが、実際にプロジェクトを確認したところ該当turnは存在せず、名前が近い`1b`（Home画面向けの円形ゲージ・ナビ案、不採用）はドメインが異なった。ユーザーに確認の上、`1b`は使わず、既に確立済みの「2a 計器編隊型」（`SessionSummary.tsx`のレイアウト言語）を土台に新規デザインする方針で進めた（31.1参照）。
+  - **完全版**（`VocabTagList.tsx`に常設）: 主計器（定着率=Review+Relearning÷全語彙数のリングゲージ）+副計器（本日の期日到来枚数・平均安定度のLCDパネル2枚）+New/Learning/Review/Relearningの内訳バー。`VocabTagList.tsx`は元々`loader: requireSession`はあったが`useLoaderData`を呼んでおらず未使用のまま生えていた（29章のGrammarCategoriesと同じパターン）ため、今回初めて活用してuserIdを取得する構成にした。
+  - **簡易版**（`VocabReview.tsx`のセッション完了画面）: セッション開始時点のスナップショットと、セッション中の状態遷移（`vocabSessionStore`に新設した`sessionTransitions`）から追加のDB問い合わせ無しで算出した完了時点の値を両方渡し、変化した項目にのみ「+N」バッジを表示する（31.3参照）。
+  - **データソース**: `user_vocab_progress`単独テーブルの集計のみで完結するため、新規DBビューは作らず`getVocabProgressStats`（`src/lib/queries/vocab.ts`）でクライアント側集計する設計にした（31.2参照）。
+  - 新規: `VocabProgressHub.test.tsx`（5件）、`vocab.test.ts`に`getVocabProgressStats`/`applySessionTransitions`（計7件）。更新: `VocabReview.test.tsx`（+2件）、`VocabTagList.test.tsx`（+2件、`loader`にセッションを追加）。`npm test`（318件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。
+  - ローカルSupabase（159語）に使い捨てテストユーザーを作成し、完全版（実データ147/3/7/2・期日到来5件・定着率6%が一致）・簡易版（3語のみのセッションで新規0(−3)/学習中3(+3)/復習156の差分表示が一致）の両方をブラウザで実地確認した。検証用スクリプト・テストユーザーは作業後に削除済み（コミット対象外）。**モバイル表示（390×844）は今回のブラウザ自動化環境のウィンドウリサイズ制約により未確認**——コード上は既存の390px確認済み画面と同じ余白設計を踏襲しているが、実ビューポートでの確認は持ち越し（31.5参照）。検証中、キーボード自動操作ツールでキー入力を間隔なく連続送出すると`VocabReview`の既存キーハンドラが古い`currentCard`を参照し続ける（実装は無改修、既存コードの挙動）ことを発見し、以降は実時間の待機を挟む方式に切り替えた（31.5参照）。
 
 ## 1. 要件概要
 
@@ -1221,6 +1227,59 @@ claude.ai Design Canvas「TOEIC-app ホーム画面リデザイン」プロジ�
 - `npm test`（302件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。
 - ブラウザでの実地確認: ローカルSupabaseに使い捨てテストユーザーを作成し、文法2カテゴリ（時制=67%・仮定法=30%）と語彙2タグ（ビジネス=100%・Part7頻出=0%、1件のみレビュー）を実際に解答/レビューして実データを生成し、4パターンの色分け（赤2件・緑2件）とソート順（弱い順）を目視確認した。検証用スクリプト・テストユーザーは作業後に削除済み（コミット対象外）。
 - **検証中のインシデント（実害なし）**: ログインフォームの操作をマウス座標クリックで行った際、直前に取得していた座標が実際のビューポートサイズとずれており、意図せず「Googleでログイン」ボタンを押してユーザー本人の実Googleアカウント選択画面まで遷移した。いずれのアカウントも選択・クリックせず即座に離脱し、ユーザーにもその場で報告した。以降はブラウザの自動入力（保存済みメール/パスワードの残存）の影響も受けないよう、`document.getElementById`+ネイティブvalueセッター経由でフォーム値を設定してから送信するJS駆動の方式に切り替えて検証を続行した。
+
+---
+
+## 31. SRS進捗ハブ（`VocabProgressHub`）の新設
+
+語彙の習熟度（FSRSの状態分布・安定度・期日到来枚数）を可視化する画面がこれまで存在しなかった（`WeakPoints.tsx`は正答率の可視化のみで、FSRS固有の指標は一切扱っていない）ため、共通コンポーネント`src/components/VocabProgressHub.tsx`を新設し、`VocabReview.tsx`（セッション完了時・簡易版）と`VocabTagList.tsx`（常設・完全版）の2箇所から利用する。
+
+### 31.1 デザインの前提について（claude.ai Design Canvas参照時の経緯）
+
+当初の依頼では「Design Canvas 2A案『習熟度メーター・ハブ』」を実装する想定だったが、実際にプロジェクト「TOEIC-app ホーム画面リデザイン」（`TOEIC Home Cockpit.dc.html`）を確認したところ、該当するturn/optionは存在しなかった。名称が近いオプションは`1b`「サーキュラーゲージ・ハブ」（Home画面のナビボタンを円形針ゲージのクラスターに置き換える案、24.1で不採用と記録済み）のみだったが、中身はHome画面のナビゲーション表現であり、FSRSの状態・安定度とは無関係だった。
+
+ユーザーに確認の上、以下の方針で進めることにした。
+
+- `1b`のサーキュラーゲージ・ハブは使わない（ドメインが異なるため）。
+- 代わりに、28章で確立した**「2a 計器編隊型」**（主計器＋副計器を横に並べるレイアウト、`SessionSummary.tsx`が実装済み）のレイアウト言語を新規デザインの土台として流用する。`SessionSummary`自体を改修・再利用するのではなく、同じレイアウト文法で`VocabProgressHub`を独立実装する（ドメインが異なる: `SessionSummary`はドリル1回分の正答率、`VocabProgressHub`は語彙ライブラリ全体の累積SRS状態）。
+- 主計器（中央の大型リング）には「定着率」（Review+Relearning状態の語彙数 ÷ 全語彙数）を表示する。副計器（LCDパネル2枚）には「本日の期日到来枚数」「平均安定度（stability、日数）」を表示する。パネル下部にNew/Learning/Review/Relearningの内訳バーを追加する（Design Canvas上に存在しない、今回のドメイン向けに新規デザインした部分）。
+
+### 31.2 データソース: 新規DBビューは作らず、クライアント側集計にした
+
+`user_vocab_progress`テーブル（6.3）を集計する新規関数`getVocabProgressStats(userId)`（`src/lib/queries/vocab.ts`）を追加した。`WeakPoints.tsx`が使う`user_grammar_category_stats`/`user_vocab_tag_stats`（6.5）は複数テーブルのJOINが必要なためDBビュー化されているが、今回必要な集計は`user_vocab_progress`単独テーブルの状態別カウント・期日カウント・安定度平均のみで、JOINが不要かつユーザー1人あたりの行数も語彙総数（最大でも数千件程度）を超えないため、新規マイグレーション（ビュー追加）はせず、`select('state, stability, due_at')`で全行を取得しクライアント側（TypeScript）で集計する方式にした。ビュー化のセキュリティ考慮（`security_invoker = true`、weak_point_views.sql参照）が不要になる分シンプルであることも判断材料にした。
+
+- `totalWords`: `vocab_words`の総件数（`count: 'exact', head: true`）。
+- `newCount`: `totalWords - (user_vocab_progressの行数)`。ts-fsrsは初回レビュー時に必ず`state: 'new'`から遷移させる（`computeNextState`が常に`scheduler.next()`を通す）ため、DB上に`state = 'new'`のまま永続する行は実質発生しない。したがって「未着手」は`user_vocab_progress`に行が無いことと同義として扱う。
+- `learningCount`/`reviewCount`/`relearningCount`: 行の`state`列をそのまま集計。
+- `dueCount`: `due_at <= now`の行数。
+- `averageStability`: 全行の`stability`の平均（行が0件なら0）。
+
+### 31.3 セッション内の「習熟度の動き」の見せ方（簡易版、`VocabReview.tsx`）
+
+簡易版は「今回のセッションでどれだけ習熟度が動いたか」を伝える必要があるため、セッション開始時点のスナップショット（`before`）とセッション完了時点の状態（`stats`）の両方を`VocabProgressHub`に渡し、コンポーネント内部で差分（新規着手数・卒業数・定着率の変化ポイントなど）をバッジ表示する設計にした。
+
+- **セッション開始時点のスナップショット**: `VocabReview`のマウント時に`getVocabProgressStats(userId)`を`react-query`で1回取得し（キャッシュキー`['vocab-progress-stats', userId]`）、セッション中は明示的な`invalidateQueries`を呼ばないため、取得結果がそのまま「セッション開始前」の値として最後まで保持される。
+- **セッション完了時点の状態**: 追加のDB問い合わせは行わず、`before`スナップショットに対して、セッション中に発生した各カードの状態遷移（レビュー前の状態→レビュー後の状態、`vocabSessionStore`の`sessionTransitions`に蓄積）を純粋関数`applySessionTransitions(baseline, transitions)`（`src/lib/queries/vocab.ts`、DB非依存でユニットテスト可能）で機械的に適用して算出する。追加のネットワーク往復が不要になる。
+- `VocabTagList.tsx`（完全版）で使う`getVocabProgressStats`と同じ関数・同じクエリキーを再利用しているため、`VocabReview`から`VocabTagList`（弱点分析ダッシュボード経由）に遷移した際は`react-query`のキャッシュがあれば即座に最新表示され、無ければ再取得される。
+
+### 31.4 配色・不採用にした表現
+
+- 状態別内訳バーの配色は、新規の色相トークンを追加せず既存のセマンティックトークンに割り当てた: New=`neutral`（未着手・中立）、Learning=`accent`（進行中、アプリのメインアクセント）、Review=`correct`（定着=既存の「正答」トークンを流用）、Relearning=`incorrect`（再学習=既存の「誤答」トークンを流用）。30.2までに確立された「correct/incorrect 2階調を保つ」方針を踏襲した。
+- 主計器のリング色は正誤の概念を持たないため`correct`/`incorrect`の出し分けはせず、`accent-600`固定とした。
+- Design Canvas原案（1b）にあった針（needle）モチーフは、28.1でSessionSummary実装時にも同じ理由（中央のテキストと重なり視認性を損なう、他画面に針の前例が無い）で見送った判断をそのまま踏襲し、今回も採用しなかった。
+- 28.2で判明したTailwind v4の落とし穴（`var(--color-*)`をJSテンプレートリテラルでインラインstyleに埋め込むとそのトークンのCSS変数自体が生成されないことがある）を踏まえ、状態色の出し分けは全て`state === 'review' ? 'stroke-correct-500' : ...`のようなリテラルな条件分岐（三項演算子・if/elseで完結したクラス名文字列）で実装し、動的なテンプレートリテラルでのクラス名合成は行わない。
+
+### 31.5 テスト・検証
+
+- 新規: `src/components/VocabProgressHub.test.tsx`（5件、full/compact両バリアント・0件時のゼロ割り回避・差分バッジの有無を検証）、`src/lib/queries/vocab.test.ts`に`getVocabProgressStats`（4件）・`applySessionTransitions`（3件）を追加。
+- 更新: `VocabReview.test.tsx`（セッション完了画面でのハブ表示・`applySessionTransitions`への引数検証・baseline取得失敗時にハブを出さないことの2件を追加）、`VocabTagList.test.tsx`（`loader`にセッションを追加した上で完全版ハブの表示・`getVocabProgressStats`失敗時もタグ一覧自体は表示され続けることの2件を追加）。
+- `npm test`（318件）・`npm run lint`（0件）・`npm run typecheck`（0件）、いずれも通過。
+- **ブラウザでの実地確認**: ローカルSupabase（159語）に使い捨てテストユーザーを作成し、以下を確認した。
+  - 完全版（`/vocab/tags`）: `user_vocab_progress`に12行（復習7・学習中3・再学習2、うち期日到来5件）を投入した状態で、ハブの表示（新規147・学習中3・復習7・再学習2・期日到来5件・定着率6%）が実データと一致することを確認。
+  - 簡易版（`VocabReview`セッション完了画面）: 156語を「復習・期日先」で埋め、残り3語のみ未着手のまま3件のみのセッションを作り、実際に3語をレビュー後、「新規 0 (−3)」「学習中 3 (+3)」「復習 156（差分無しのため差分バッジ非表示）」が正しく表示されることを確認。定着率は移動先が復習ではなく学習中だったため98%のまま変化せず、差分バッジも出ない——これは仕様どおりの挙動（定着率の分子はReview+Relearningのみ）である。
+  - **検証中に発見した副作用（実装は変更していない、テスト手法上の注意点として記録）**: キーボード操作の自動化ツールで「Enter」→評価キーを間を空けず連続20回送出したところ、`isRevealed`/`mutation.isPending`の状態更新がReactの再描画に反映される前に後続のキーイベントが処理され、`handleRate`のクロージャが古い`currentCard`を参照し続ける挙動を確認した（結果として20回の評価が同一の1語に対して送信された）。これはこのプロジェクトの既存の`VocabReview`キーボードハンドラの挙動であり、`VocabProgressHub`固有の不具合ではない。人間の入力速度では起こり得ないタイミング依存の事象のため、今回はコード修正の対象にしなかったが、今後キーボード操作の自動テスト・自動操作を行う際は、各キー入力の間に実時間の待機を挟むこと（本章の検証はこの方式に切り替えて実施した）。
+  - 検証用スクリプト（使い捨てユーザー作成・データ投入用の一時ファイル）・テストユーザー本体はいずれも作業後に削除済み（コミット対象外）。
+  - **モバイル表示（390×844）は今回未確認**: ブラウザ自動化環境のウィンドウが1280×752に固定されており、`resize_window`で390×844を指定しても実際のビューポート（`window.innerWidth`）が変化しなかった（新規タブでも同様）。コード上は`w-full max-w-md`・flex/gapベースの余白設計で、既に390px幅で確認済みの`WeakPoints`/`SessionSummary`と同じレイアウト方針を踏襲しているため大きな崩れは想定しにくいが、実機・実ビューポートでの確認はできていない。次回、環境のウィンドウリサイズ制約が外れた際、または実ブラウザでの確認時に追って実施が必要。
 
 ---
 

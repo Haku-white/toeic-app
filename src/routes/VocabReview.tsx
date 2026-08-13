@@ -1,11 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLoaderData, useNavigate, useParams } from 'react-router-dom'
 import type { Session } from '@supabase/supabase-js'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { getDueVocabCards, getVocabTagByCode, submitVocabReview } from '../lib/queries/vocab'
+import {
+  applySessionTransitions,
+  getDueVocabCards,
+  getVocabProgressStats,
+  getVocabTagByCode,
+  submitVocabReview,
+} from '../lib/queries/vocab'
 import { computeNextState, type FsrsRatingKey } from '../lib/fsrs'
 import { useVocabSessionStore } from '../stores/vocabSessionStore'
 import AskTutorPanel from '../components/AskTutorPanel'
+import VocabProgressHub from '../components/VocabProgressHub'
 
 const RATING_LABELS: Record<FsrsRatingKey, string> = {
   again: 'もう一度',
@@ -46,7 +53,8 @@ export default function VocabReview() {
   })
   const tagLabel = tag?.name ?? tagCode
 
-  const { currentIndex, isRevealed, reviewedCount, reveal, advance, resetSession } = useVocabSessionStore()
+  const { currentIndex, isRevealed, reviewedCount, sessionTransitions, reveal, advance, recordTransition, resetSession } =
+    useVocabSessionStore()
   const revealedAtRef = useRef<number | null>(null)
   // AskTutorPanelのテキストエリアにフォーカスがある間は、Enterがショートカット「答えを見る」
   // ではなく質問送信に使われる（26章）。下部のヒント表示をそれに合わせて切り替えるための状態。
@@ -57,9 +65,23 @@ export default function VocabReview() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tagCode])
 
+  // SRS進捗ハブ（31章）の簡易版向け: セッション開始時点のスナップショット。セッション中に
+  // invalidateQueriesを呼ばないため、この結果がそのまま「開始前」の値として保持され続ける。
+  const { data: progressStatsBefore } = useQuery({
+    queryKey: ['vocab-progress-stats', userId],
+    queryFn: () => getVocabProgressStats(userId),
+  })
+  const sessionProgressStats = useMemo(
+    () => (progressStatsBefore ? applySessionTransitions(progressStatsBefore, sessionTransitions) : null),
+    [progressStatsBefore, sessionTransitions],
+  )
+
   const mutation = useMutation({
     mutationFn: submitVocabReview,
-    onSuccess: () => advance(),
+    onSuccess: (data, variables) => {
+      recordTransition({ before: variables.currentProgress, after: data })
+      advance()
+    },
   })
 
   const currentCard = cards?.[currentIndex]
@@ -153,6 +175,9 @@ export default function VocabReview() {
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-neutral-50 px-4">
         <p className="text-lg font-semibold text-neutral-900">セッション完了</p>
         <p className="text-sm text-neutral-600">{reviewedCount}件のカードをレビューしました。</p>
+        {sessionProgressStats && progressStatsBefore && (
+          <VocabProgressHub variant="compact" stats={sessionProgressStats} before={progressStatsBefore} />
+        )}
         <Link
           to={backTo}
           className="rounded bg-accent-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500"

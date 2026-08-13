@@ -1,13 +1,24 @@
-import { Link } from 'react-router-dom'
+import { Link, useLoaderData } from 'react-router-dom'
 import { useMemo } from 'react'
+import type { Session } from '@supabase/supabase-js'
 import { useQuery } from '@tanstack/react-query'
-import { getVocabTags } from '../lib/queries/vocab'
+import { getVocabProgressStats, getVocabTags } from '../lib/queries/vocab'
 import { assignShortcutKeys, useMenuShortcuts } from '../lib/useMenuShortcuts'
+import VocabProgressHub from '../components/VocabProgressHub'
 
 export default function VocabTagList() {
+  const { session } = useLoaderData() as { session: Session }
+  const userId = session.user.id
+
   const { data: tags, isLoading, isError, error } = useQuery({
     queryKey: ['vocab-tags'],
     queryFn: getVocabTags,
+  })
+  // SRS進捗ハブ（31章）の完全版。タグ一覧とは独立したクエリのため、失敗・読み込み中でも
+  // タグ一覧自体の表示は妨げない（`progressStats`が無ければハブ自体を描画しない）。
+  const { data: progressStats } = useQuery({
+    queryKey: ['vocab-progress-stats', userId],
+    queryFn: () => getVocabProgressStats(userId),
   })
 
   // タグ一覧 + 「ホームに戻る」を1つの連番シーケンスとして扱う（DOM順: タグ→戻るリンク）。
@@ -39,6 +50,8 @@ export default function VocabTagList() {
   return (
     <div className="flex min-h-screen flex-col items-center gap-6 bg-neutral-50 px-4 py-12">
       <h1 className="text-xl font-semibold text-neutral-900">語彙タグ一覧</h1>
+
+      {progressStats && <VocabProgressHub variant="full" stats={progressStats} />}
 
       {tags!.length === 0 ? (
         <p className="text-sm text-neutral-500">まだ語彙タグがありません。</p>

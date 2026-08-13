@@ -1,6 +1,16 @@
 import { supabase } from '../supabase'
 import { computeNextState, type FsrsRatingKey, type FsrsStateKey, type VocabProgressState } from '../fsrs'
 
+export interface VocabProgressStats {
+  totalWords: number
+  newCount: number
+  learningCount: number
+  reviewCount: number
+  relearningCount: number
+  dueCount: number
+  averageStability: number
+}
+
 export interface VocabCard {
   vocabWordId: string
   word: string
@@ -248,4 +258,102 @@ export async function submitVocabReview(params: SubmitVocabReviewParams): Promis
   if (logError) throw logError
 
   return progress
+}
+
+/**
+ * SRS進捗ハブ（`VocabProgressHub`、31章）向けの集計。`user_vocab_progress`単独テーブルのみで
+ * 完結する集計のため、`user_grammar_category_stats`等（JOINが必要、6.5）と異なり新規DBビューは
+ * 作らずクライアント側で集計する（31.2参照）。
+ */
+export async function getVocabProgressStats(userId: string): Promise<VocabProgressStats> {
+  const nowIso = new Date().toISOString()
+
+  const [{ count: totalWords, error: totalError }, { data: progressRows, error: progressError }] =
+    await Promise.all([
+      supabase.from('vocab_words').select('id', { count: 'exact', head: true }),
+      supabase.from('user_vocab_progress').select('state, stability, due_at').eq('user_id', userId),
+    ])
+  if (totalError) throw totalError
+  if (progressError) throw progressError
+
+  const rows = progressRows as Pick<UserVocabProgressRow, 'state' | 'stability' | 'due_at'>[]
+  let learningCount = 0
+  let reviewCount = 0
+  let relearningCount = 0
+  let dueCount = 0
+  let stabilitySum = 0
+  for (const row of rows) {
+    // ts-fsrsは初回レビュー時に必ず'new'から遷移させるため、DB上に`state = 'new'`のまま
+    // 永続する行は実質発生しない（31.2参照）。「未着手」は行が無いことと同義として扱う。
+    if (row.state === 'learning') learningCount += 1
+    else if (row.state === 'review') reviewCount += 1
+    else if (row.state === 'relearning') relearningCount += 1
+    if (row.due_at <= nowIso) dueCount += 1
+    stabilitySum += row.stability
+  }
+
+  return {
+    totalWords: totalWords ?? 0,
+    newCount: Math.max(0, (totalWords ?? 0) - rows.length),
+    learningCount,
+    reviewCount,
+    relearningCount,
+    dueCount,
+    averageStability: rows.length > 0 ? stabilitySum / rows.length : 0,
+  }
+}
+
+export interface SessionTransition {
+  /** null = このセッションで初めて着手した単語（着手前は`user_vocab_progress`行が無い） */
+  before: VocabProgressState | null
+  after: VocabProgressState
+}
+
+/**
+ * `baseline`（セッション開始時点のスナップショット）に、セッション中に発生した状態遷移を
+ * 機械的に適用し、追加のDB問い合わせ無しで「セッション完了時点」の統計を導出する純粋関数
+ * （31.3参照）。副作用を持たないため単体テスト可能。
+ */
+export function applySessionTransitions(
+  baseline: VocabProgressStats,
+  transitions: SessionTransition[],
+  now: Date = new Date(),
+): VocabProgressStats {
+  const nowIso = now.toISOString()
+  const startedBefore = baseline.totalWords - baseline.newCount
+  let newCount = baseline.newCount
+  let learningCount = baseline.learningCount
+  let reviewCount = baseline.reviewCount
+  let relearningCount = baseline.relearningCount
+  let dueCount = baseline.dueCount
+  let stabilitySum = baseline.averageStability * startedBefore
+  let newlyStartedCount = 0
+
+  for (const { before, after } of transitions) {
+    if (before === null) {
+      newCount -= 1
+      newlyStartedCount += 1
+    } else if (before.state === 'learning') learningCount -= 1
+    else if (before.state === 'review') reviewCount -= 1
+    else if (before.state === 'relearning') relearningCount -= 1
+    if (before && before.dueAt <= nowIso) dueCount -= 1
+    stabilitySum -= before?.stability ?? 0
+
+    if (after.state === 'learning') learningCount += 1
+    else if (after.state === 'review') reviewCount += 1
+    else if (after.state === 'relearning') relearningCount += 1
+    // after.dueAtは常に未来の日時（再スケジュール直後）のため、dueCountには加算されない
+    stabilitySum += after.stability
+  }
+
+  const startedAfter = startedBefore + newlyStartedCount
+  return {
+    totalWords: baseline.totalWords,
+    newCount: Math.max(0, newCount),
+    learningCount: Math.max(0, learningCount),
+    reviewCount: Math.max(0, reviewCount),
+    relearningCount: Math.max(0, relearningCount),
+    dueCount: Math.max(0, dueCount),
+    averageStability: startedAfter > 0 ? stabilitySum / startedAfter : 0,
+  }
 }

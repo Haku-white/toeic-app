@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { VocabProgressState } from '../fsrs'
+import type { VocabProgressStats } from './vocab'
 
 // `../supabase` はネットワークに接続する実クライアントなので、テーブルごとに
 // チェーン可能・awaitable なクエリビルダのモックへ差し替える。
-type MockResult = { data: unknown; error: unknown }
+type MockResult = { data: unknown; error: unknown; count?: number | null }
 
 function makeQueryBuilder(result: MockResult) {
   const builder: Record<string, unknown> = {}
@@ -34,7 +35,8 @@ vi.mock('../supabase', () => ({
   },
 }))
 
-const { getDueVocabCards, getVocabTagByCode, getVocabTags, submitVocabReview } = await import('./vocab')
+const { applySessionTransitions, getDueVocabCards, getVocabProgressStats, getVocabTagByCode, getVocabTags, submitVocabReview } =
+  await import('./vocab')
 
 beforeEach(() => {
   fromMock.mockReset()
@@ -303,5 +305,147 @@ describe('submitVocabReview', () => {
     ).rejects.toThrow('rls denied')
 
     expect(insertSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('getVocabProgressStats', () => {
+  it('aggregates state counts, due count, and average stability from user_vocab_progress', async () => {
+    const pastIso = new Date(Date.now() - 86400000).toISOString()
+    const futureIso = new Date(Date.now() + 86400000).toISOString()
+
+    fromMock.mockImplementation((table: string) => {
+      if (table === 'vocab_words') return makeQueryBuilder({ data: null, error: null, count: 10 })
+      if (table === 'user_vocab_progress') {
+        return makeQueryBuilder({
+          data: [
+            { state: 'learning', stability: 2, due_at: futureIso },
+            { state: 'review', stability: 8, due_at: pastIso },
+            { state: 'review', stability: 12, due_at: futureIso },
+            { state: 'relearning', stability: 1, due_at: pastIso },
+          ],
+          error: null,
+        })
+      }
+      throw new Error(`unexpected table: ${table}`)
+    })
+
+    const stats = await getVocabProgressStats('user-1')
+
+    expect(stats).toEqual({
+      totalWords: 10,
+      newCount: 6,
+      learningCount: 1,
+      reviewCount: 2,
+      relearningCount: 1,
+      dueCount: 2,
+      averageStability: (2 + 8 + 12 + 1) / 4,
+    })
+  })
+
+  it('returns zeroed stats when the user has no progress rows yet', async () => {
+    fromMock.mockImplementation((table: string) => {
+      if (table === 'vocab_words') return makeQueryBuilder({ data: null, error: null, count: 5 })
+      if (table === 'user_vocab_progress') return makeQueryBuilder({ data: [], error: null })
+      throw new Error(`unexpected table: ${table}`)
+    })
+
+    const stats = await getVocabProgressStats('user-1')
+
+    expect(stats).toEqual({
+      totalWords: 5,
+      newCount: 5,
+      learningCount: 0,
+      reviewCount: 0,
+      relearningCount: 0,
+      dueCount: 0,
+      averageStability: 0,
+    })
+  })
+
+  it('throws when the word-count query fails', async () => {
+    fromMock.mockImplementation((table: string) => {
+      if (table === 'vocab_words') return makeQueryBuilder({ data: null, error: new Error('boom'), count: null })
+      return makeQueryBuilder({ data: [], error: null })
+    })
+    await expect(getVocabProgressStats('user-1')).rejects.toThrow('boom')
+  })
+
+  it('throws when the progress query fails', async () => {
+    fromMock.mockImplementation((table: string) => {
+      if (table === 'vocab_words') return makeQueryBuilder({ data: null, error: null, count: 10 })
+      return makeQueryBuilder({ data: null, error: new Error('rls denied') })
+    })
+    await expect(getVocabProgressStats('user-1')).rejects.toThrow('rls denied')
+  })
+})
+
+describe('applySessionTransitions', () => {
+  const baseline: VocabProgressStats = {
+    totalWords: 10,
+    newCount: 6,
+    learningCount: 1,
+    reviewCount: 2,
+    relearningCount: 1,
+    dueCount: 2,
+    averageStability: 5.75, // (2+8+12+1)/4、startedCount=4
+  }
+
+  it('returns the baseline unchanged when there are no transitions', () => {
+    expect(applySessionTransitions(baseline, [])).toEqual(baseline)
+  })
+
+  it('moves a brand-new word out of the New bucket and recalculates average stability', () => {
+    const now = new Date('2026-08-13T00:00:00.000Z')
+    const after: VocabProgressState = {
+      state: 'learning',
+      dueAt: '2026-08-14T00:00:00.000Z',
+      stability: 1,
+      difficulty: 5,
+      elapsedDays: 0,
+      scheduledDays: 1,
+      reps: 1,
+      lapses: 0,
+      lastReviewAt: now.toISOString(),
+    }
+
+    const result = applySessionTransitions(baseline, [{ before: null, after }], now)
+
+    expect(result.newCount).toBe(5)
+    expect(result.learningCount).toBe(2)
+    expect(result.dueCount).toBe(2) // 着手前がnullのため期日到来数には影響しない
+    expect(result.averageStability).toBeCloseTo(24 / 5) // (23+1)/(4+1)
+  })
+
+  it('moves a due review card into relearning and removes it from the due count', () => {
+    const now = new Date('2026-08-13T00:00:00.000Z')
+    const before: VocabProgressState = {
+      state: 'review',
+      dueAt: '2026-08-12T00:00:00.000Z', // nowより過去=期日到来済み
+      stability: 8,
+      difficulty: 5,
+      elapsedDays: 5,
+      scheduledDays: 5,
+      reps: 3,
+      lapses: 0,
+      lastReviewAt: '2026-08-08T00:00:00.000Z',
+    }
+    const after: VocabProgressState = {
+      state: 'relearning',
+      dueAt: '2026-08-13T00:10:00.000Z',
+      stability: 1,
+      difficulty: 6,
+      elapsedDays: 5,
+      scheduledDays: 0.1,
+      reps: 4,
+      lapses: 1,
+      lastReviewAt: now.toISOString(),
+    }
+
+    const result = applySessionTransitions(baseline, [{ before, after }], now)
+
+    expect(result.reviewCount).toBe(1)
+    expect(result.relearningCount).toBe(2)
+    expect(result.dueCount).toBe(1) // 期日到来済みだったカードが再スケジュールされ、除外された
+    expect(result.averageStability).toBeCloseTo(4) // (23-8+1)/4、startedCountは変化なし
   })
 })

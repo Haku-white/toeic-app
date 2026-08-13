@@ -10,12 +10,25 @@ vi.mock('../lib/queries/vocab', () => ({
   getDueVocabCards: vi.fn(),
   getVocabTagByCode: vi.fn(),
   submitVocabReview: vi.fn(),
+  getVocabProgressStats: vi.fn(),
+  applySessionTransitions: vi.fn(),
 }))
 vi.mock('../lib/queries/tutor', () => ({
   askTutor: vi.fn(),
 }))
 
-const { getDueVocabCards, getVocabTagByCode, submitVocabReview } = await import('../lib/queries/vocab')
+const { getDueVocabCards, getVocabTagByCode, submitVocabReview, getVocabProgressStats, applySessionTransitions } =
+  await import('../lib/queries/vocab')
+
+const sampleProgressStats = {
+  totalWords: 100,
+  newCount: 40,
+  learningCount: 10,
+  reviewCount: 45,
+  relearningCount: 5,
+  dueCount: 8,
+  averageStability: 12.34,
+}
 
 const fakeSession = { user: { id: 'user-1', email: 'test@example.com' } } as unknown as Session
 
@@ -53,6 +66,8 @@ beforeEach(() => {
   vi.mocked(getDueVocabCards).mockReset()
   vi.mocked(getVocabTagByCode).mockReset().mockResolvedValue(null)
   vi.mocked(submitVocabReview).mockReset()
+  vi.mocked(getVocabProgressStats).mockReset().mockResolvedValue(sampleProgressStats)
+  vi.mocked(applySessionTransitions).mockReset().mockReturnValue(sampleProgressStats)
 })
 
 describe('VocabReview', () => {
@@ -281,5 +296,53 @@ describe('VocabReview', () => {
     // ミューテーションが未解決(pending)のまま2回目のキー入力をしても追加送信されない
     fireEvent.keyDown(window, { key: '2' })
     expect(submitVocabReview).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows the compact SRS progress hub (31章) on the session-complete screen, fed by the recorded state transition', async () => {
+    vi.mocked(getDueVocabCards).mockResolvedValue([sampleCard])
+    const afterReview = {
+      state: 'learning' as const,
+      dueAt: new Date().toISOString(),
+      stability: 1,
+      difficulty: 5,
+      elapsedDays: 0,
+      scheduledDays: 1,
+      reps: 1,
+      lapses: 0,
+      lastReviewAt: new Date().toISOString(),
+    }
+    vi.mocked(submitVocabReview).mockResolvedValue(afterReview)
+
+    renderVocabReview()
+    fireEvent.click(await screen.findByRole('button', { name: '答えを見る' }))
+    fireEvent.click(await screen.findByRole('button', { name: /普通/ }))
+
+    expect(await screen.findByText('セッション完了')).toBeInTheDocument()
+    // sampleCard.progressはnull(初出の単語)のため、beforeはnullとして記録される
+    expect(applySessionTransitions).toHaveBeenCalledWith(sampleProgressStats, [{ before: null, after: afterReview }])
+    expect(screen.getByText('SESSION IMPACT')).toBeInTheDocument()
+  })
+
+  it('omits the progress hub when the baseline SRS stats query fails', async () => {
+    vi.mocked(getDueVocabCards).mockResolvedValue([sampleCard])
+    vi.mocked(getVocabProgressStats).mockReset().mockRejectedValue(new Error('boom'))
+    vi.mocked(submitVocabReview).mockResolvedValue({
+      state: 'learning',
+      dueAt: new Date().toISOString(),
+      stability: 1,
+      difficulty: 5,
+      elapsedDays: 0,
+      scheduledDays: 1,
+      reps: 1,
+      lapses: 0,
+      lastReviewAt: new Date().toISOString(),
+    })
+
+    renderVocabReview()
+    fireEvent.click(await screen.findByRole('button', { name: '答えを見る' }))
+    fireEvent.click(await screen.findByRole('button', { name: /普通/ }))
+
+    expect(await screen.findByText('セッション完了')).toBeInTheDocument()
+    expect(screen.queryByText('SESSION IMPACT')).not.toBeInTheDocument()
   })
 })
