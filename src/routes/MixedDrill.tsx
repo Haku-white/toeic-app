@@ -10,8 +10,8 @@ import SessionSummary, { SessionSummaryAction } from '../components/SessionSumma
 import QuestionCard, { QuestionProgressBar } from '../components/QuestionCard'
 
 const CHOICE_LABELS = ['1', '2', '3', '4']
-const GRAMMAR_COUNT = 5
-const VOCAB_COUNT = 5
+const GRAMMAR_COUNT = 10
+const VOCAB_COUNT = 10
 const COMPLETE_SCREEN_LINK_TO = '/'
 
 export default function MixedDrill() {

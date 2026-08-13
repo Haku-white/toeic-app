@@ -98,6 +98,9 @@
   - 両画面でverbatimに重複していた設問カード・選択肢ボタン・状態分岐ロジック・解説/警告/AskTutorPanel/次へボタンのブロックを新設`src/components/QuestionCard.tsx`（+進捗の小型計器`QuestionProgressBar`）に抽出した。パネルはアイボリー系（暗色パネルは長文読解タスクの可読性を落とすため不採用）、リングゲージ/LCD統計パネルは持ち込まず（1問+4択には集計すべき統計値が無いため）、正誤フィードバックは行全体の色分けを維持（4択のリアルタイム比較にはSessionSummary等の「装飾のみ色分け」方針は不向きと判断）しつつ未選択・不正解の2択に新規の減光分岐を追加した。
   - 正誤の状態表示メカニズム自体は変更していないため、既存の`GrammarDrill.test.tsx`/`MixedDrill.test.tsx`は無改修で全件通過。新規`QuestionCard.test.tsx`を9件追加。`npm test`（327件、318件から+9件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。
   - ローカルSupabaseの使い捨てテストユーザーでGrammarDrill/MixedDrillの表示・正誤色分け・キーボード操作（1〜4/Enter/`?`）・セッション完了画面への遷移を実地確認した（検証用スクリプト・テストユーザーは作業後削除、コミット対象外）。モバイル表示は31.5と同じ環境制約により今回も未確認。
+- 2026-08-13: `SessionSummary`の副計器ラベルを「出題 / 正答」→「正答 / 出題」の表示順に変更した（値も`{totalCount} / {correctCount}`→`{correctCount} / {totalCount}`に合わせて入れ替え）。GrammarDrill/MixedDrill両方の完了画面に影響する共通コンポーネントのため、両画面とも一貫して新しい順序になる。`SessionSummary.test.tsx`の該当アサーションを`'10 / 8'`→`'8 / 10'`に更新。総合問題（`MixedDrill`）の出題数を、文法5問+語彙5問(計10問)から文法10問+語彙10問(計20問)に変更した（`GRAMMAR_COUNT`/`VOCAB_COUNT`定数のみの変更、50/50比率は維持）。既存テストはいずれもモックデータで問題数を制御しており出題数の定数を直接検証していないため、この変更は無改修で通過した。`npm test`（339件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。
+- 2026-08-13: パスワード再設定（メールリンク経由）を追加した（33章、新設）。`Login.tsx`に「パスワードをお忘れですか?」からのリセット申請モードを追加し、新規ルート`/reset-password`（`ResetPassword.tsx`）でメールリンクから新しいパスワードを設定できるようにした。ローカルSupabaseの`additional_redirect_urls`に`/reset-password`が未登録で、`site_url`へ静かにフォールバックしパスの情報が失われる不具合を実地確認で発見し`supabase/config.toml`を修正した——**クラウド側の同設定（Authentication → URL Configuration）は今回変更していないため、本番で使うには別途ダッシュボードでの追加が必要**。新規`Login.test.tsx`（5件）・`ResetPassword.test.tsx`（7件）を追加。`npm test`（339件、327件から+12件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。ローカルSupabase+Mailpitで実際のメール送信〜リンク遷移〜パスワード更新〜新パスワードでの再ログインまでのE2Eフローを実地確認済み（検証用スクリプト・テストユーザーは作業後削除、コミット対象外）。
+- 2026-08-13: 文法カテゴリ画面（`GrammarCategories`）を、29章で採用した暗色パネル（6a案）からアイボリーパネルへ再刷新した（29.3追記）。SessionSummary/WeakPoints/VocabProgressHub/GrammarDrill・MixedDrillが全てアイボリーパネルに統一される中、本画面だけが暗色パネルのまま「浮いている」というユーザー指摘を受けて対応。夜景バナー（遠近グリッド+街明かりSVG）・暗色ベゼルの行構成を削除し、WeakPoints/VocabProgressHubと同じ「アイボリーパネル+ライトベゼル行」に統一した。29.1でユーザー指定していた黄色い発光ドット装飾も、暗色パネル前提の意匠だったため削除した（理由をDESIGN.md 29.3に明記）。表示ロジック自体は無変更のため`GrammarCategories.test.tsx`は無改修で全件通過。`npm test`（327件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。ローカルSupabaseの使い捨てテストユーザーでブラウザ実地確認済み（検証用スクリプト・テストユーザーは作業後削除、コミット対象外）。
 
 ## 1. 要件概要
 
@@ -1204,6 +1207,23 @@ claude.ai Design Canvas「TOEIC-app ホーム画面リデザイン」プロジ�
 - `npm test`（302件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。
 - ブラウザでの実地確認: ローカルSupabaseに使い捨てテストユーザーを作成し、(a)全カテゴリ未挑戦の状態（進捗バー空・「—」表示）、(b)「時制」カテゴリを実際に3問解答した後の状態（33%表示・進捗バー点灯、他カテゴリは引き続き「—」）の両方を目視確認した。黄色ドットへの配色変更も反映されていることを確認。検証用スクリプト（使い捨てユーザーの作成・削除）・テストユーザー自体は作業後に削除済み（コミット対象外）。
 
+### 29.3 アイボリーパネルへの再刷新（2026-08-13）
+
+28章（SessionSummary）・30章（WeakPoints）・31章（VocabProgressHub）・32章（GrammarDrill/MixedDrill）が全てアイボリーパネル（`bg-neutral-50`+四隅ネジ+アクセント色のヘアラインヘッダー）に統一される一方、本画面（6a案）だけがパネル全体を暗色にした構成のまま取り残されていた。ユーザーから「文法カテゴリのところだけ浮いている」と指摘を受け、他画面と統一する方向で再刷新した。
+
+- パネル外殻を、29.1で採用した暗色グラデーション（`oklch(12%...)`〜`oklch(19%...)`）から、WeakPoints/VocabProgressHubと全く同じ`rounded-[18px] bg-neutral-50`+四隅ネジ（`bg-neutral-300`）に置き換えた。遠近グリッド+街明かりのSVG夜景バナー（`PERSPECTIVE_LINES`/`HORIZON_LINES`/`CITY_LIGHTS`）・`h-28`スペーサー・下部の放射状ヴィネットは全て削除し、見出し「文法カテゴリ」はWeakPointsと同じ`<h1>`直書きに戻した。
+- ヘアラインヘッダー（`GRAMMAR CATEGORIES`）は、暗色パネル埋め込みの発光プレート配色から、他画面と同じ`bg-[repeating-linear-gradient(135deg,var(--color-accent-200)...)]`+`text-accent-700`のライト配色に変更した。
+- 各カテゴリ行（`CategoryRow`）は、暗色ベゼル（`bg-[oklch(26%...)]`）+アイボリー内側カードの二重構成から、WeakPoints`GaugeTile`/Home.tsxのロッカースイッチと同じ「ライトベゼル（`bg-accent-100`）+白い内側カード」構成に置き換えた。
+- **29.1でユーザー指定していた黄色い発光ドットは削除した**: 暗色パネル上で「ランプが灯る」ことを前提にした装飾だったため、白い行の上に単独で置くと文脈を失い浮いて見える。他のアイボリー行（WeakPoints・VocabProgressHub・QuestionCard）にも同種のドット装飾は無く、一貫性の観点からも削除が妥当と判断した——都度確認は求めず判断して進めたが、ユーザー指定だった経緯があるため明示的にここに記録する。
+- 「ホームに戻る」リンクも、専用のバッジ風スタイルからWeakPointsと同一の`text-sm text-neutral-500 underline`パターンに揃えた。
+- `accuracyRate`のマージロジック・「—」プレースホルダー・`isLastOdd`の2列レイアウト・ショートカットキー割り当てなど、表示ロジック自体は一切変更していない。
+
+#### テスト・検証
+
+- `GrammarCategories.test.tsx`は無改修のまま全5件通過（スタイル変更のみでDOM構造・アクセシブルネーム・テキストは変えていないため）。
+- `npm test`（327件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。
+- ローカルSupabaseに使い捨てテストユーザーを作成し、9カテゴリ全て未挑戦の状態でブラウザ実地確認した。パネル外殻・ヘアラインヘッダー・カテゴリ行のいずれもWeakPoints/VocabProgressHubと視覚的に統一されていることを確認。検証用スクリプト・テストユーザーは作業後に削除済み（コミット対象外）。
+
 ---
 
 ## 30. 弱点分析ダッシュボード（`WeakPoints`）のDesign Canvas「8a リングメーター・グリッド型」への刷新
@@ -1313,6 +1333,33 @@ GrammarDrill.tsx/MixedDrill.tsxでverbatimに重複していた設問カード�
   - MixedDrill（`/mixed-drill`）: `MIXED DRILL`ヘッダー・`文法`kindバッジ・進捗キャプション（`文法X/Y・語彙X/Y`の2ドメイン内訳）の表示を確認。正解（2: will be completed）を選んで緑色表示になること、`?`ショートカットで`AskTutorPanel`が開きキーボードヒントが「Enter: 質問を送信 / Shift+Enter: 改行 / Ctrl+Enter: 次へ」に切り替わることを確認。
   - 検証用スクリプト（使い捨てユーザー作成用の一時ファイル）・テストユーザー本体はいずれも作業後に削除済み（コミット対象外）。
   - **モバイル表示（390×844）は今回も未確認**: 31.5で記録した同じ制約（ブラウザ自動化環境のウィンドウが1280×752に固定され、`resize_window`を呼んでも`window.innerWidth`が変化しない）が本セッションでも再現した。コード上は既存の390px確認済み画面（WeakPoints/SessionSummary/VocabProgressHub）と同じ`w-full max-w-md`・flex/gapベースの余白設計を踏襲しているが、実ビューポートでの確認は持ち越し。
+
+---
+
+## 33. パスワード再設定（メールリンク経由）の追加
+
+`Login.tsx`にサインイン/新規登録に続く3つ目のモード（`reset`）を追加し、「パスワードをお忘れですか?」からメールアドレスのみを入力して`supabase.auth.resetPasswordForEmail()`を呼び出せるようにした。新規ルート`/reset-password`（`src/routes/ResetPassword.tsx`）を追加し、メール内リンクを踏んだ先で新しいパスワードを設定できるようにした。
+
+### 33.1 認証フローの設計
+
+- Supabaseクライアントは`flowType: 'pkce'`（`src/lib/supabase.ts`）のため、パスワード再設定メールのリンクは`{redirectTo}?code=...`形式でアプリに戻ってくる。`detectSessionInUrl: true`により、クライアント初期化時にこの`code`が自動的にセッション（リカバリーセッション）に交換される——`AuthCallback.tsx`のOAuthコールバックと同じ前提を踏襲した。
+- `/reset-password`ルートは`requireSession`ローダーを使わない。`requireSession`は未セッション時に`/login`へリダイレクトするだけで、リンク切れ・期限切れの理由を伝えられないため、`AuthCallback.tsx`と同じ「独自にセッション状態を確認する」パターンを踏襲し、`ResetPassword.tsx`内で`onAuthStateChange`の`PASSWORD_RECOVERY`イベントと`getSession()`の両方を見て、有効なセッションが無ければ専用のエラーメッセージ（「リンクが無効か、有効期限が切れています。」）を表示する。
+- URLに`error`/`error_description`パラメータが付いている場合（メール送信元の対策でリンクが既に使用済み・期限切れの場合にSupabaseがこの形で返す）は、`getSession()`を呼ばずに即座にエラー表示へ分岐する。この判定はuseStateの初期化関数内で同期的に行い（`react-hooks/set-state-in-effect`のlint方針に沿い、effect内での同期的なsetStateを避けるため）、effect内では改めて同じ判定関数を呼んで早期returnの条件にのみ使う。
+- パスワード更新自体は`supabase.auth.updateUser({ password })`。成功後はホーム（`/`）へのリンクを表示するのみで自動遷移はしない（`AuthCallback.tsx`のような`window.location.replace`は使わず、Login.tsx/AuthCallback.tsxの既存パターンに合わせて`<a href="/">`のプレーンなアンカーにした——テストでのモックしやすさも考慮）。
+
+### 33.2 ローカル/クラウドのリダイレクトURL許可リスト
+
+- Supabase Authは`redirectTo`に任意のURLを渡せず、`site_url`/`additional_redirect_urls`の許可リストに完全一致するURLのみへリダイレクトする（オープンリダイレクト対策）。`supabase/config.toml`の`additional_redirect_urls`に`/auth/callback`用のURLしか登録されていなかったため、`http://127.0.0.1:3000/reset-password`・`http://localhost:3000/reset-password`を追加した。追加前は許可リストに一致せず`site_url`（`http://127.0.0.1:3000`、パス無し）に静かにフォールバックしてしまい、`/reset-password`に辿り着けない不具合を実地確認で発見・修正した。
+- ローカルの`supabase stop`→`supabase start`（`config.toml`の変更を反映するため）を実施した。バックアップからのリストアのため`user_vocab_progress`等の既存データは失われていない（`db reset`ではなく`stop`/`start`のため、23章のバックアップ規約の対象外）ことを確認済み。
+- **クラウド（本番）Supabaseプロジェクトの認証設定（Dashboard → Authentication → URL Configuration → Redirect URLs）には今回一切手を入れていない**。本番ドメインの`/reset-password`をこの許可リストに追加しない限り、本番環境でパスワード再設定メールのリンクは機能しない。これはSupabaseダッシュボード上の操作であり、CLAUDE.mdの「クラウドSupabaseプロジェクトへのマイグレーション反映・データ変更は明示的な指示がない限り行わない」に該当するため、実施していない。**本番で使う場合はユーザー側でこの設定を追加する必要がある**。
+
+### 33.3 テスト・検証
+
+- 新規`src/routes/Login.test.tsx`（5件）: 「パスワードをお忘れですか?」でリセットモードに切り替わること、新規登録モードでは同リンクを表示しないこと、`resetPasswordForEmail`呼び出しと確認メッセージ、エラー表示、「ログインに戻る」での復帰を検証。
+- 新規`src/routes/ResetPassword.test.tsx`（7件）: セッション確認前のローディング表示、セッション確立後の新パスワード入力フォーム表示、URLエラーパラメータでのリンク切れ表示（`getSession`を呼ばないことも検証）、セッション無し時のリンク切れ表示、パスワード不一致のバリデーション、更新成功時の成功画面とホームリンク、`updateUser`失敗時のエラー表示。
+- supabase-jsの`Session`/`User`/`AuthError`/`Subscription`型は必須フィールドが多いため、モック値は`@supabase/supabase-js`から型のみをimportしてキャストして使用した（UIの振る舞い検証が目的で、SDKの型契約そのものの検証ではないため）。
+- `npm test`（339件、327件から+12件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。
+- **ブラウザでの実地確認（ローカルSupabase、Mailpitで実メール相当を確認）**: 使い捨てテストユーザーを作成し、実際に(1)「パスワードをお忘れですか?」からメールアドレスを送信、(2) MailpitのAPIで送信されたメール本文からリセットリンクを取得、(3) リンクを実際にブラウザで開いてPKCEコード交換〜新パスワード入力フォームへの遷移を確認、(4) 新しいパスワードを送信して更新成功画面を確認、(5) ログアウト後に新しいパスワードで実際にログインできることを確認、という一連のE2Eフローを検証した。33.2の許可リスト不備もこの過程で発見した。検証用スクリプト・テストユーザーは作業後に削除済み（コミット対象外）。
 
 ---
 

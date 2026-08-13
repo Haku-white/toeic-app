@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import './index.css'
 import Login from './routes/Login'
 import AuthCallback from './routes/AuthCallback'
+import ResetPassword from './routes/ResetPassword'
 import Home from './routes/Home'
 import VocabReview from './routes/VocabReview'
 import VocabTagList from './routes/VocabTagList'
@@ -19,6 +20,7 @@ const queryClient = new QueryClient()
 const router = createBrowserRouter([
   { path: '/login', element: <Login /> },
   { path: '/auth/callback', element: <AuthCallback /> },
+  { path: '/reset-password', element: <ResetPassword /> },
   { path: '/', element: <Home />, loader: requireSession },
   { path: '/vocab/review', element: <VocabReview />, loader: requireSession },
   { path: '/vocab/review/:tagCode', element: <VocabReview />, loader: requireSession },

@@ -111,9 +111,9 @@ export default function SessionSummary({ correctCount, totalCount, elapsedMs, ca
             </p>
           </div>
           <div className="flex flex-1 flex-col justify-center gap-0.5 rounded-[10px] bg-neutral-900 px-3.5 py-2 shadow-[inset_0_1px_2px_rgba(0,0,0,.35)]">
-            <p className="font-mono text-[9px] font-bold tracking-[0.1em] text-accent-400/70">出題 / 正答</p>
+            <p className="font-mono text-[9px] font-bold tracking-[0.1em] text-accent-400/70">正答 / 出題</p>
             <p className="font-mono text-lg font-bold tabular-nums text-accent-200">
-              {totalCount} / {correctCount}
+              {correctCount} / {totalCount}
             </p>
           </div>
         </div>

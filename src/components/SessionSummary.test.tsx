@@ -12,7 +12,7 @@ describe('SessionSummary', () => {
     render(<SessionSummary correctCount={8} totalCount={10} elapsedMs={4 * 60_000 + 12_000} />)
 
     expect(accuracyText('80%')).toBeInTheDocument()
-    expect(screen.getByText('10 / 8')).toBeInTheDocument()
+    expect(screen.getByText('8 / 10')).toBeInTheDocument()
     expect(screen.getByText('4:12')).toBeInTheDocument()
   })
 
