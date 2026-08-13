@@ -103,7 +103,8 @@ async function markItem(
   if (error) throw error
 }
 
-async function loadExistingVocabWordPosPairs(supabase: SupabaseClient): Promise<Set<string>> {
+/** 21.5: `import_cefrj_wordlist.ts`の重複除外でも再利用するためexportしている。 */
+export async function loadExistingVocabWordPosPairs(supabase: SupabaseClient): Promise<Set<string>> {
   const { data, error } = await supabase.from('vocab_words').select('word, part_of_speech')
   if (error) throw error
   return new Set(

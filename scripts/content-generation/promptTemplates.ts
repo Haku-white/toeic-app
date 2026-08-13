@@ -8,9 +8,15 @@ function fillTemplate(template: string, values: Record<string, string>): string 
   return template.replace(/\{\{(\w+)\}\}/g, (match, key: string) => (key in values ? values[key] : match))
 }
 
-/** `prompts/{name}.md`を読み込む（8.3・13.2・11.3参照） */
+/** `prompts/{name}.md`を読み込む（8.3・13.2・11.3・21.5参照） */
 export function loadTemplate(
-  name: 'grammar' | 'vocab' | 'idiom' | 'grammar_additional_explanation' | 'vocab_additional_explanation',
+  name:
+    | 'grammar'
+    | 'vocab'
+    | 'idiom'
+    | 'grammar_additional_explanation'
+    | 'vocab_additional_explanation'
+    | 'vocab_from_wordlist',
 ): string {
   return readFileSync(join(currentDir, 'prompts', `${name}.md`), 'utf-8')
 }
@@ -124,6 +130,39 @@ export function buildIdiomPrompt(params: BuildIdiomPromptParams): string {
   return fillTemplate(loadTemplate('idiom'), {
     count: String(params.count),
     target_band: String(params.targetBand),
+    existing_words: formatSamples(params.existingWords),
+    json_schema: JSON.stringify(VOCAB_JSON_SCHEMA, null, 2),
+  })
+}
+
+/** 21.5: CEFR-J等の外部単語リストから選定済みの単語1件分。 */
+export interface WordlistCandidate {
+  word: string
+  partOfSpeech: string
+  cefrLevel: string
+}
+
+export interface BuildVocabFromWordlistPromptParams {
+  words: WordlistCandidate[]
+  targetBand: number
+  existingWords: string[]
+}
+
+function formatWordList(words: WordlistCandidate[]): string {
+  return words.map((w) => `- ${w.word} (${w.partOfSpeech}, CEFR ${w.cefrLevel})`).join('\n')
+}
+
+/**
+ * 21.3・21.5: CEFR-J等から選定済みの単語リストを渡し、単語選定はリストに委ねたうえで
+ * meaning_ja/example_sentence_en/example_sentence_ja/etymology_note/tagsの生成のみを
+ * Geminiに依頼するプロンプト。`VOCAB_JSON_SCHEMA`自体は`buildVocabPrompt`と共通。
+ */
+export function buildVocabFromWordlistPrompt(params: BuildVocabFromWordlistPromptParams): string {
+  const cefrLevels = Array.from(new Set(params.words.map((w) => w.cefrLevel))).join('/')
+  return fillTemplate(loadTemplate('vocab_from_wordlist'), {
+    cefr_level: cefrLevels,
+    target_band: String(params.targetBand),
+    word_list: formatWordList(params.words),
     existing_words: formatSamples(params.existingWords),
     json_schema: JSON.stringify(VOCAB_JSON_SCHEMA, null, 2),
   })

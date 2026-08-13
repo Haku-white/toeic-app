@@ -5,6 +5,7 @@ import {
   buildGrammarPrompt,
   buildIdiomPrompt,
   buildVocabAdditionalExplanationPrompt,
+  buildVocabFromWordlistPrompt,
   buildVocabPrompt,
   GRAMMAR_JSON_SCHEMA,
   VOCAB_JSON_SCHEMA,
@@ -86,6 +87,53 @@ describe('buildIdiomPrompt', () => {
   it('falls back to a placeholder message when there are no existing idioms', () => {
     const prompt = buildIdiomPrompt({ count: 1, targetBand: 600, existingWords: [] })
     expect(prompt).toContain('（なし）')
+  })
+})
+
+describe('buildVocabFromWordlistPrompt (21.5)', () => {
+  it('substitutes the word list, merged CEFR levels, target band, and embeds the vocab JSON schema', () => {
+    const prompt = buildVocabFromWordlistPrompt({
+      words: [
+        { word: 'abandon', partOfSpeech: 'verb', cefrLevel: 'B1' },
+        { word: 'abandoned', partOfSpeech: 'adjective', cefrLevel: 'B2' },
+      ],
+      targetBand: 660,
+      existingWords: ['negotiate'],
+    })
+
+    expect(prompt).toContain('CEFRレベル: B1/B2')
+    expect(prompt).toContain('TOEIC目安 660点前後')
+    expect(prompt).toContain('- abandon (verb, CEFR B1)')
+    expect(prompt).toContain('- abandoned (adjective, CEFR B2)')
+    expect(prompt).toContain('- negotiate')
+    expect(prompt).toContain('"ビジネス"')
+    expect(prompt).toContain('"日常会話"')
+    expect(prompt).toContain('"Part7頻出"')
+    expect(prompt).toContain('新しい単語を創作したり')
+    expect(prompt).toContain('The CEFR-J Wordlist Version 1.5')
+    expect(prompt).toContain(JSON.stringify(VOCAB_JSON_SCHEMA, null, 2))
+    expect(prompt).not.toMatch(/\{\{\w+\}\}/)
+  })
+
+  it('falls back to a placeholder message when there are no existing words', () => {
+    const prompt = buildVocabFromWordlistPrompt({
+      words: [{ word: 'abandon', partOfSpeech: 'verb', cefrLevel: 'B1' }],
+      targetBand: 600,
+      existingWords: [],
+    })
+    expect(prompt).toContain('（なし）')
+  })
+
+  it('deduplicates repeated CEFR levels in the header', () => {
+    const prompt = buildVocabFromWordlistPrompt({
+      words: [
+        { word: 'abandon', partOfSpeech: 'verb', cefrLevel: 'B1' },
+        { word: 'able', partOfSpeech: 'adjective', cefrLevel: 'B1' },
+      ],
+      targetBand: 600,
+      existingWords: [],
+    })
+    expect(prompt).toContain('CEFRレベル: B1、')
   })
 })
 

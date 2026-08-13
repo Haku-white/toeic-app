@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { generateVocabBatch, IDIOM_TAG_NAME } from './generateVocab'
+import { generateVocabBatch, generateVocabBatchFromWordlist, IDIOM_TAG_NAME } from './generateVocab'
 
 // .envに依存せずテストを決定的にするため、また「CLIで--modelを指定しない限り
 // env.GEMINI_MODELがそのままモデル名として使われる」という修正済みの挙動を検証するためモックする。
@@ -241,5 +241,99 @@ describe('generateVocabBatch', () => {
       expect(promptArg).toContain('- get the ball rolling')
       expect(promptArg).not.toContain('【テーマ】') // vocab.md固有の見出しは含まれない
     })
+  })
+})
+
+describe('generateVocabBatchFromWordlist (21.5)', () => {
+  it('creates a batch, uses only DB-wide existing words as dedup context, and stores pending items', async () => {
+    const fromMock = vi.fn((table: string) => {
+      if (table === 'generation_batches') return makeQueryBuilder({ data: { id: 'batch-wl-1' }, error: null })
+      if (table === 'vocab_words') return makeQueryBuilder({ data: [{ word: 'negotiate' }], error: null })
+      if (table === 'generation_batch_items') return makeQueryBuilder({ data: null, error: null })
+      throw new Error(`unexpected table: ${table}`)
+    })
+    const supabase = { from: fromMock } as unknown as Parameters<typeof generateVocabBatchFromWordlist>[1]['supabase']
+
+    const geminiItems = [
+      {
+        word: 'abandon',
+        part_of_speech: 'verb',
+        meaning_ja: '放棄する',
+        example_sentence_en: 'The company decided to abandon the project.',
+        example_sentence_ja: '会社はそのプロジェクトを放棄することにした。',
+        toeic_band: 600,
+        etymology_note: 'a-(〜に)+bandon(支配)→「支配下に置く」→そこから「委ねる、放棄する」',
+        tags: ['ビジネス'],
+      },
+    ]
+    const generateJsonArray = vi.fn().mockResolvedValue({ items: geminiItems, truncated: false, parseRecovered: false })
+
+    const result = await generateVocabBatchFromWordlist(
+      { words: [{ word: 'abandon', partOfSpeech: 'verb', cefrLevel: 'B1' }], targetBand: 600 },
+      { supabase, generateJsonArray },
+    )
+
+    expect(result).toEqual({ batchId: 'batch-wl-1', itemCount: 1, truncated: false })
+
+    // vocab_tags/vocab_word_tagsは(単一タグに紐づかないため)問い合わせない
+    expect(fromMock.mock.calls.map((c) => c[0])).toEqual([
+      'generation_batches',
+      'vocab_words',
+      'generation_batch_items',
+      'generation_batches',
+    ])
+
+    const promptArg = generateJsonArray.mock.calls[0][0].prompt as string
+    expect(promptArg).toContain('- abandon (verb, CEFR B1)')
+    expect(promptArg).toContain('- negotiate')
+    expect(promptArg).toContain('TOEIC目安 600点前後')
+
+    const itemsBuilder = fromMock.mock.results.find(
+      (_r, i) => fromMock.mock.calls[i][0] === 'generation_batch_items',
+    )!.value
+    expect(itemsBuilder.insert).toHaveBeenCalledWith([
+      { batch_id: 'batch-wl-1', raw_payload: geminiItems[0], status: 'pending_validation' },
+    ])
+  })
+
+  it('throws without calling Gemini when words is empty', async () => {
+    const supabase = { from: vi.fn() } as unknown as Parameters<typeof generateVocabBatchFromWordlist>[1]['supabase']
+    const generateJsonArray = vi.fn()
+
+    await expect(
+      generateVocabBatchFromWordlist({ words: [], targetBand: 600 }, { supabase, generateJsonArray }),
+    ).rejects.toThrow('words は1件以上必要です')
+    expect(generateJsonArray).not.toHaveBeenCalled()
+  })
+
+  it('records a note on generation_batches when the Gemini output was truncated (10.6)', async () => {
+    const fromMock = vi.fn((table: string) => {
+      if (table === 'generation_batches') return makeQueryBuilder({ data: { id: 'batch-wl-trunc' }, error: null })
+      if (table === 'vocab_words') return makeQueryBuilder({ data: [], error: null })
+      if (table === 'generation_batch_items') return makeQueryBuilder({ data: null, error: null })
+      throw new Error(`unexpected table: ${table}`)
+    })
+    const supabase = { from: fromMock } as unknown as Parameters<typeof generateVocabBatchFromWordlist>[1]['supabase']
+    const generateJsonArray = vi.fn().mockResolvedValue({ items: [], truncated: true, parseRecovered: false })
+
+    const result = await generateVocabBatchFromWordlist(
+      {
+        words: [
+          { word: 'abandon', partOfSpeech: 'verb', cefrLevel: 'B1' },
+          { word: 'able', partOfSpeech: 'adjective', cefrLevel: 'B1' },
+        ],
+        targetBand: 600,
+      },
+      { supabase, generateJsonArray },
+    )
+
+    expect(result).toEqual({ batchId: 'batch-wl-trunc', itemCount: 0, truncated: true })
+    const batchesCalls = fromMock.mock.calls
+      .map((call, i) => ({ call, result: fromMock.mock.results[i].value }))
+      .filter((c) => c.call[0] === 'generation_batches')
+    const updateBuilder = batchesCalls[batchesCalls.length - 1].result
+    expect(updateBuilder.update).toHaveBeenCalledWith(
+      expect.objectContaining({ notes: expect.stringContaining('依頼2件中0件のみ生成・保存') }),
+    )
   })
 })

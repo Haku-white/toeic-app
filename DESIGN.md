@@ -100,6 +100,7 @@
   - ローカルSupabaseの使い捨てテストユーザーでGrammarDrill/MixedDrillの表示・正誤色分け・キーボード操作（1〜4/Enter/`?`）・セッション完了画面への遷移を実地確認した（検証用スクリプト・テストユーザーは作業後削除、コミット対象外）。モバイル表示は31.5と同じ環境制約により今回も未確認。
 - 2026-08-13: `SessionSummary`の副計器ラベルを「出題 / 正答」→「正答 / 出題」の表示順に変更した（値も`{totalCount} / {correctCount}`→`{correctCount} / {totalCount}`に合わせて入れ替え）。GrammarDrill/MixedDrill両方の完了画面に影響する共通コンポーネントのため、両画面とも一貫して新しい順序になる。`SessionSummary.test.tsx`の該当アサーションを`'10 / 8'`→`'8 / 10'`に更新。総合問題（`MixedDrill`）の出題数を、文法5問+語彙5問(計10問)から文法10問+語彙10問(計20問)に変更した（`GRAMMAR_COUNT`/`VOCAB_COUNT`定数のみの変更、50/50比率は維持）。既存テストはいずれもモックデータで問題数を制御しており出題数の定数を直接検証していないため、この変更は無改修で通過した。`npm test`（339件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。
 - 2026-08-13: パスワード再設定（メールリンク経由）を追加した（33章、新設）。`Login.tsx`に「パスワードをお忘れですか?」からのリセット申請モードを追加し、新規ルート`/reset-password`（`ResetPassword.tsx`）でメールリンクから新しいパスワードを設定できるようにした。ローカルSupabaseの`additional_redirect_urls`に`/reset-password`が未登録で、`site_url`へ静かにフォールバックしパスの情報が失われる不具合を実地確認で発見し`supabase/config.toml`を修正した——**クラウド側の同設定（Authentication → URL Configuration）は今回変更していないため、本番で使うには別途ダッシュボードでの追加が必要**。新規`Login.test.tsx`（5件）・`ResetPassword.test.tsx`（7件）を追加。`npm test`（339件、327件から+12件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。ローカルSupabase+Mailpitで実際のメール送信〜リンク遷移〜パスワード更新〜新パスワードでの再ログインまでのE2Eフローを実地確認済み（検証用スクリプト・テストユーザーは作業後削除、コミット対象外）。
+- 2026-08-13: CEFR-J Wordlist（21章、調査済み）を実際に取り込む小規模テストバッチを実装した。新規`scripts/content-generation/cefrjWordlist.ts`（CSVパース・POS/レベルフィルタ・複数語フレーズ除外・CEFR→TOEIC帯マッピング、純粋関数）+`import_cefrj_wordlist.ts`（CLI、既存の命名規約どおりCLIラッパー+camelCase実処理に分割）を新設し、`generateVocab.ts`に新規`generateVocabBatchFromWordlist`（既存`generateVocabBatch`は無改修）、`promptTemplates.ts`に新規`buildVocabFromWordlistPrompt`+`prompts/vocab_from_wordlist.md`を追加した。検証（`validateBatch.ts`）・コミット（`commitBatch.ts`）・レビュー（`review_batch.ts`）は完全に無改修のまま再利用できた。CEFR-Jのデータ（`cefrj-vocabulary-profile-1.5.csv`）と引用表記を`scripts/content-generation/data/`・`README.md`に追加した。`npm test`（356件、339件から+17件）・`npm run lint`（0件）・`npm run typecheck`（0件）・`npm run typecheck:scripts`（0件）全て通過。**ローカルSupabaseのみ**（環境変数を一時上書き、クラウド本番DBには一切書き込んでいない）で実際に25語（B1/B2、abandon〜accent）を抽出→生成→検証（25件全てauto_passed）→コミットまで通し、`vocab_words`が159→184件に増加したこと・生成内容の品質・word/part_of_speechの忠実性（25件全て一致）を確認した（詳細は21.6参照）。本格的な取り込み（数百〜数千語規模、クラウドへの反映）は今回のスコープ外とし、ユーザーからの別途指示を待つ。
 - 2026-08-13: 文法カテゴリ画面（`GrammarCategories`）を、29章で採用した暗色パネル（6a案）からアイボリーパネルへ再刷新した（29.3追記）。SessionSummary/WeakPoints/VocabProgressHub/GrammarDrill・MixedDrillが全てアイボリーパネルに統一される中、本画面だけが暗色パネルのまま「浮いている」というユーザー指摘を受けて対応。夜景バナー（遠近グリッド+街明かりSVG）・暗色ベゼルの行構成を削除し、WeakPoints/VocabProgressHubと同じ「アイボリーパネル+ライトベゼル行」に統一した。29.1でユーザー指定していた黄色い発光ドット装飾も、暗色パネル前提の意匠だったため削除した（理由をDESIGN.md 29.3に明記）。表示ロジック自体は無変更のため`GrammarCategories.test.tsx`は無改修で全件通過。`npm test`（327件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。ローカルSupabaseの使い捨てテストユーザーでブラウザ実地確認済み（検証用スクリプト・テストユーザーは作業後削除、コミット対象外）。
 
 ## 1. 要件概要
@@ -966,7 +967,7 @@ DB全体との近似重複検出（8.4②、既存）に加え、**同一バッ�
 
 ---
 
-## 21. CEFR-J Wordlistを用いた語彙選定候補の調査【設計案・実装なし】
+## 21. CEFR-J Wordlistを用いた語彙選定候補の調査と小規模テストバッチ実装
 
 > **章番号について**: 本来なら12（未決事項）の手前＝13が次の番号だが、コード中のコメントには
 > DESIGN.mdに未反映のまま「13章」（イディオム機能）・「14章」（総合問題/mixedDrill）・
@@ -979,7 +980,7 @@ DB全体との近似重複検出（8.4②、既存）に加え、**同一バッ�
 > ——22は前述のとおりAIチューター機能の参照で既に使われているため22も避けた）。
 
 
-現状、語彙は単語選定を含め全てGeminiにゼロから生成させているが、単語の**選定**だけを公開語彙リスト（CEFR-J Wordlist）に委ね、日本語訳・例文・語源解説・追加解説の**生成**は既存パイプラインのまま使う、という組み合わせが可能か調査した。本章は調査・設計のみで、DB変更・データ投入は一切行っていない（次セッションで別途指示があった場合に実装する）。
+現状、語彙は単語選定を含め全てGeminiにゼロから生成させているが、単語の**選定**だけを公開語彙リスト（CEFR-J Wordlist）に委ね、日本語訳・例文・語源解説・追加解説の**生成**は既存パイプラインのまま使う、という組み合わせが可能か調査した。21.1〜21.4は調査・設計のみの記録（実装なし）。21.5・21.6で実際に実装し、ローカルSupabase向けの小規模テストバッチ（25語）で生成→検証→コミットまでの動作を確認した。**本格的な取り込み（数百〜数千語規模、クラウド本番DBへの投入）は今回のスコープ外で、ユーザーからの別途指示を待つ**（21.6参照）。
 
 ### 21.1 データソースとライセンス
 
@@ -1019,6 +1020,47 @@ DB全体との近似重複検出（8.4②、既存）に加え、**同一バッ�
 - **複数語フレーズ（142件）の扱い**: イディオム/句動詞タグとの境界が曖昧。取り込み対象から一律除外する案としたが、`according to`のような頻出コロケーションを機会損失にする可能性もある——次セッションでの実装判断時に再検討の余地あり。
 - **Octanove（C1/C2）はライセンスが別**: 取り込む場合は引用表記を独立して管理する必要がある（21.1参照）。今回のB1〜B2中心の方針では優先度は低い。
 - **重複判定は`word+part_of_speech`の完全一致のみ**: CEFR-Jの見出し語表記（例: 大文字小文字や"a.m./A.M./am/AM"のような複数表記まとめ）と既存DBの表記揺れがあると見逃す可能性がある。実装時に正規化ルールを詰める必要がある。
+
+### 21.5 実装方針（本セッションで実装）
+
+21.3の案を踏まえ、既存パイプラインの命名規約（CLAUDE.md「ディレクトリ構成・命名パターン」節: CLIエントリポイントはsnake_case、実処理はcamelCase）に合わせて実際のファイル名を確定し、21.4の未解決論点に対応した。
+
+**ファイル構成**（21.3案の`importCefrjWordlist.ts`という単一ファイル案から、既存の`generate_grammar.ts`/`generateGrammar.ts`と同型の「CLIラッパー+実処理」分割に変更）:
+- `scripts/content-generation/cefrjWordlist.ts`（新規）: CSVパース・POS/レベルフィルタ・複数語フレーズ除外・CEFR→TOEIC帯マッピングの純粋関数群（DB/ファイルI/O非依存、単体テスト可能）。
+- `scripts/content-generation/import_cefrj_wordlist.ts`（新規、CLI）: CSVファイル読込→`cefrjWordlist.ts`でフィルタ→DB重複除外→`generateVocabBatchFromWordlist`呼び出し、の薄いラッパー。
+- `scripts/content-generation/data/cefrj-vocabulary-profile-1.5.csv`（新規、データ同梱）: 実行時のネットワーク依存を無くすため、CSVスナップショットをリポジトリにコミットする。取得日・引用表記・ライセンスは同ディレクトリの`data/README.md`に明記。Octanove（C1/C2、別ライセンス）は今回のスコープ外のためコミットしない。
+
+**21.4への対応**:
+- **ビジネス文脈適合性フィルタ**: CEFR-J側での事前フィルタは設けず、21.3案どおりGeminiに委ねる——新規プロンプト`prompts/vocab_from_wordlist.md`で、既存タグ3種（ビジネス/日常会話/Part7頻出、イディオムは対象外）から単語ごとに最も適切なものを選ばせる。CEFR-Jは「使用可能かどうか」の選定源、TOEIC文脈への適合判断は既存の生成パイプライン（Gemini）に委ねるという役割分担を徹底した。
+- **複数語フレーズ（142件）**: 21.3案どおり既定で除外（`headword`に空白または`/`を含む行をスキップ）。この除外ロジックの副作用として、"a.m./A.M./am/AM"のような表記ゆれをまとめた行（`/`区切り）も自動的に除外されるため、21.4で懸念していた表記ゆれの重複誤判定リスクも同時に解消される。
+- **Octanove（C1/C2）**: 今回は一切取り込まない（データファイル自体を同梱しない）。
+- **重複判定**: 新規に正規化ルールは設けず、既存の`wordPosKey`（`validateBatch.ts`の`loadExistingVocabWordPosPairs`をexportして再利用、大文字小文字を区別しない正規化はしない）とまったく同じ完全一致比較にした——独自の正規化ルールを導入すると、生成・検証パイプラインの実際の重複判定基準とズレる方がリスクが大きいと判断した。
+
+**CEFRレベル→TOEIC目安スコアのマッピング**（新規、`cefrjWordlist.ts`の`CEFR_TO_TOEIC_BAND`定数）:
+
+| CEFR | A1 | A2 | B1 | B2 | C1 |
+|---|---|---|---|---|---|
+| TOEIC目安 | 400 | 500 | 600 | 730 | 860 |
+
+21.2で判明した「既存収録語彙（CEFR-J一致分85語）の81%がB1〜B2に集中し、B2=38語がボリュームゾーン」という実データと、生成パイプラインの既定`target_band`が730（B2相当）であることの整合を根拠に、TOEIC対策教材で目安として広く使われる400/500/600/730/860のスコア刻みにB1〜C1を単純に対応付けた。この値はプロンプト内で「TOEIC目安◯点前後」という参考情報としてGeminiに渡すのみで、`toeic_band`フィールドの値自体は既存パイプラインと同様Geminiの生成に委ねる（ハードコードしない）。C2は今回のスコープ外（B1〜B2中心、必要に応じてC1を上位帯として利用する21.2の方針どおり）。
+
+**既存関数の変更範囲**: `generateVocab.ts`の既存`generateVocabBatch`（タグ名+件数を渡す既存フロー）は無改修。新規に`generateVocabBatchFromWordlist`（単語リストを渡す新フロー）を同ファイルに追加し、`getDbWideExistingWords`等の内部ヘルパーをそのまま再利用した。`VOCAB_JSON_SCHEMA`・検証（`validateBatch.ts`）・コミット（`commitBatch.ts`）・レビュー（`review_batch.ts`）は完全に無改修で再利用できた（21.3の想定どおり）。
+
+**小規模テストバッチの実行環境**: CLAUDE.mdの方針上、`scripts/content-generation/`配下のCLIは既定でクラウドSupabaseプロジェクトを指す（23章）。今回はあくまで「本格導入前の動作検証」であり、ユーザーからも「テストバッチが問題なければ本格導入は別途指示する」と明示されているため、**検証はローカルSupabase向けに環境変数を一時的に上書きして実施し、クラウド本番DBへは一切書き込まない**（CLAUDE.mdの「.env運用ルール」節にある一時上書きの手順をそのまま踏襲）。実行結果は本章の該当節に追記する。
+
+### 21.6 小規模テストバッチの実行結果（2026-08-13、ローカルSupabaseのみ）
+
+`npx tsx scripts/content-generation/import_cefrj_wordlist.ts --limit 25`（`SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY`をローカル向けに一時上書き）を実行し、抽出→生成→検証→コミットの一連のフローを実際に通した。
+
+- **抽出**: B1/B2で4,971語中、既存収録語彙との重複を除いた未収録候補は4,913語（21.2の粗い試算4,843語と近い値。差分は21.1のスラッシュ表記ゆれ除外等、フィルタ条件の細部の違いによるもの）。`--limit 25`によりそのうち先頭25語（abandon, abandoned, able, abnormal, abnormally, aboard, abolish, aboriginal, aborigine, above, abruptly, absence, absent, absentee, absolute, absolutely, absorb, abstract, absurd, abundance, abundant, abuse, academic, academy, accent）を選定。
+- **生成**（`generateVocabBatchFromWordlist`、`gemini-3.6-flash`）: 25件を1回のGemini呼び出しで生成、切り詰めなし。
+  - **word/part_of_speechの忠実性**: 25件全てが指定リストの語・品詞と完全一致した（Gemini側が単語を創作・変更するリスクは今回の範囲では顕在化しなかった）。ただし件数が少ないため、本格導入時はより大規模なバッチでこの忠実性を継続確認する必要がある——現状のパイプラインには「出力語が入力リストに含まれるか」を機械的に検証するステップが無く、目視確認に依存している（21.4で挙げていない新規リスクとして記録）。
+  - **タグ振り分け**: 25件中、単一タグのみが7件、2タグ付与が18件（例: `abolish`→["ビジネス","Part7頻出"]、`aborigine`→["日常会話"]）。「イディオム」タグが誤って選ばれた件は無かった。
+  - **toeic_band**: 600（6件）・730（19件）のみで、21.5のマッピング表（B1→600, B2→730）に沿った値が生成された（Geminiに値を強制してはいないが、結果的に整合していた）。
+- **検証**（`validateBatch`）: 25件中 `auto_passed`=25件、`needs_review`=0件（構造チェック・pg_trgm近似重複検出のいずれにも引っかからなかった）。21.3で見込んだとおり、事前にDB側で重複除外した候補を渡すことで構造チェックの完全一致重複は発生しなかった。
+- **コミット**（`commitBatch`）: 25件全て成功。ローカルDBの`vocab_words`は159→184件に増加。新規`vocab_tags`行は作成されなかった（全てのタグが既存の3タグ「ビジネス」「日常会話」「Part7頻出」に解決された）。
+- 生成されたカードの内容（日本語訳・例文・語源解説）を目視確認し、既存パイプラインの生成物と遜色ない品質であることを確認した。
+- **クラウド本番DBへは一切投入していない**。ローカルDBに残った25件のテストデータは、次回セッションでの本格導入方針次第で残置・削除いずれも可能な状態のまま（ユーザーに確認予定）。
 
 ---
 

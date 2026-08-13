@@ -1,7 +1,15 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { buildIdiomPrompt, buildVocabPrompt, VOCAB_JSON_SCHEMA } from './promptTemplates'
+import {
+  buildIdiomPrompt,
+  buildVocabFromWordlistPrompt,
+  buildVocabPrompt,
+  VOCAB_JSON_SCHEMA,
+  type WordlistCandidate,
+} from './promptTemplates'
 import type { generateJsonArray as generateJsonArrayFn } from './gemini'
 import { loadEnv } from './env'
+
+export type { WordlistCandidate }
 
 /** 13.1: イディオムは常にこのタグに紐づく（`vocab_tags`への事前seedは不要、8.6のupsertで自動作成される） */
 export const IDIOM_TAG_NAME = 'イディオム'
@@ -183,6 +191,88 @@ export async function generateVocabBatch(
   const notes =
     truncated || parseRecovered
       ? `Gemini出力が最大トークン数で切り詰められた可能性があります（依頼${params.count}件中${items.length}件のみ生成・保存）。`
+      : null
+
+  const { error: updateError } = await supabase
+    .from('generation_batches')
+    .update({ generated_count: items.length, status: 'validating', notes })
+    .eq('id', batchId)
+  if (updateError) throw updateError
+
+  return { batchId, itemCount: items.length, truncated: truncated || parseRecovered }
+}
+
+export interface GenerateVocabBatchFromWordlistParams {
+  /** 事前に選定・重複除外済みの単語リスト（CEFR-J等、21章参照）。空配列は不可。 */
+  words: WordlistCandidate[]
+  targetBand: number
+  promptVersion?: string
+  modelName?: string
+}
+
+/**
+ * 21.5: `generateVocabBatch`（タグ名+件数→Geminiが単語選定から丸ごと生成）とは別に、
+ * 単語選定を外部リストに委ねたフロー。`content_type`は既存と同じ'vocab'のまま
+ * （DBスキーマ変更なし、21.3の想定どおり）。既存の`getDbWideExistingWords`をそのまま
+ * 再利用し、重複回避コンテキストとしてDB全体の直近語をプロンプトに含める——単一タグに
+ * 紐づかないため（Gemini自身がタグを選ぶ）、`getSameTagExistingWords`は使わない。
+ * `generateVocabBatch`本体は無改修のまま、この関数だけを追加した。
+ */
+export async function generateVocabBatchFromWordlist(
+  params: GenerateVocabBatchFromWordlistParams,
+  deps: GenerateVocabBatchDeps,
+): Promise<GenerateVocabBatchResult> {
+  const { supabase, generateJsonArray } = deps
+
+  if (params.words.length === 0) {
+    throw new Error('words は1件以上必要です')
+  }
+
+  const modelName = params.modelName ?? loadEnv().GEMINI_MODEL
+  const promptVersion = params.promptVersion ?? 'vocab_from_wordlist_v1'
+
+  const { data: batch, error: batchError } = await supabase
+    .from('generation_batches')
+    .insert({
+      content_type: 'vocab',
+      model_name: modelName,
+      prompt_version: promptVersion,
+      requested_count: params.words.length,
+      status: 'generating',
+    })
+    .select('id')
+    .single()
+  if (batchError) throw batchError
+  const batchId = (batch as { id: string }).id
+
+  const existingWords = await getDbWideExistingWords(supabase)
+
+  const prompt = buildVocabFromWordlistPrompt({
+    words: params.words,
+    targetBand: params.targetBand,
+    existingWords,
+  })
+
+  const { items, truncated, parseRecovered } = await generateJsonArray<unknown>({
+    prompt,
+    schema: VOCAB_JSON_SCHEMA,
+    model: modelName,
+  })
+
+  if (items.length > 0) {
+    const { error: itemsError } = await supabase.from('generation_batch_items').insert(
+      items.map((raw_payload) => ({
+        batch_id: batchId,
+        raw_payload,
+        status: 'pending_validation',
+      })),
+    )
+    if (itemsError) throw itemsError
+  }
+
+  const notes =
+    truncated || parseRecovered
+      ? `Gemini出力が最大トークン数で切り詰められた可能性があります（依頼${params.words.length}件中${items.length}件のみ生成・保存）。`
       : null
 
   const { error: updateError } = await supabase
