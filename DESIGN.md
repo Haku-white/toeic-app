@@ -102,6 +102,7 @@
 - 2026-08-13: パスワード再設定（メールリンク経由）を追加した（33章、新設）。`Login.tsx`に「パスワードをお忘れですか?」からのリセット申請モードを追加し、新規ルート`/reset-password`（`ResetPassword.tsx`）でメールリンクから新しいパスワードを設定できるようにした。ローカルSupabaseの`additional_redirect_urls`に`/reset-password`が未登録で、`site_url`へ静かにフォールバックしパスの情報が失われる不具合を実地確認で発見し`supabase/config.toml`を修正した——**クラウド側の同設定（Authentication → URL Configuration）は今回変更していないため、本番で使うには別途ダッシュボードでの追加が必要**。新規`Login.test.tsx`（5件）・`ResetPassword.test.tsx`（7件）を追加。`npm test`（339件、327件から+12件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。ローカルSupabase+Mailpitで実際のメール送信〜リンク遷移〜パスワード更新〜新パスワードでの再ログインまでのE2Eフローを実地確認済み（検証用スクリプト・テストユーザーは作業後削除、コミット対象外）。
 - 2026-08-13: CEFR-J Wordlist（21章、調査済み）を実際に取り込む小規模テストバッチを実装した。新規`scripts/content-generation/cefrjWordlist.ts`（CSVパース・POS/レベルフィルタ・複数語フレーズ除外・CEFR→TOEIC帯マッピング、純粋関数）+`import_cefrj_wordlist.ts`（CLI、既存の命名規約どおりCLIラッパー+camelCase実処理に分割）を新設し、`generateVocab.ts`に新規`generateVocabBatchFromWordlist`（既存`generateVocabBatch`は無改修）、`promptTemplates.ts`に新規`buildVocabFromWordlistPrompt`+`prompts/vocab_from_wordlist.md`を追加した。検証（`validateBatch.ts`）・コミット（`commitBatch.ts`）・レビュー（`review_batch.ts`）は完全に無改修のまま再利用できた。CEFR-Jのデータ（`cefrj-vocabulary-profile-1.5.csv`）と引用表記を`scripts/content-generation/data/`・`README.md`に追加した。`npm test`（356件、339件から+17件）・`npm run lint`（0件）・`npm run typecheck`（0件）・`npm run typecheck:scripts`（0件）全て通過。**ローカルSupabaseのみ**（環境変数を一時上書き、クラウド本番DBには一切書き込んでいない）で実際に25語（B1/B2、abandon〜accent）を抽出→生成→検証（25件全てauto_passed）→コミットまで通し、`vocab_words`が159→184件に増加したこと・生成内容の品質・word/part_of_speechの忠実性（25件全て一致）を確認した（詳細は21.6参照）。本格的な取り込み（数百〜数千語規模、クラウドへの反映）は今回のスコープ外とし、ユーザーからの別途指示を待つ。
 - 2026-08-13: 文法カテゴリ画面（`GrammarCategories`）を、29章で採用した暗色パネル（6a案）からアイボリーパネルへ再刷新した（29.3追記）。SessionSummary/WeakPoints/VocabProgressHub/GrammarDrill・MixedDrillが全てアイボリーパネルに統一される中、本画面だけが暗色パネルのまま「浮いている」というユーザー指摘を受けて対応。夜景バナー（遠近グリッド+街明かりSVG）・暗色ベゼルの行構成を削除し、WeakPoints/VocabProgressHubと同じ「アイボリーパネル+ライトベゼル行」に統一した。29.1でユーザー指定していた黄色い発光ドット装飾も、暗色パネル前提の意匠だったため削除した（理由をDESIGN.md 29.3に明記）。表示ロジック自体は無変更のため`GrammarCategories.test.tsx`は無改修で全件通過。`npm test`（327件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。ローカルSupabaseの使い捨てテストユーザーでブラウザ実地確認済み（検証用スクリプト・テストユーザーは作業後削除、コミット対象外）。
+- 2026-08-13: CEFR-Jテストバッチ（21.6、25語）の本採用をユーザーが確定した（21.7追記）。削除せず本格導入の一部として扱う方針となったが、この25件は現時点で**ローカルSupabaseの`vocab_words`にのみ**存在し、クラウド本番DBにはまだ反映されていない——「本採用確定」と「本番反映済み」は別の状態であることをDESIGN.mdに明記した。クラウドへの反映方法（Gemini再実行か、検証済み内容の複製か）は未選択で、CLAUDE.mdの方針上クラウドDBへのデータ変更は別途明示的な指示を受けてから実施する。コード変更なし（DESIGN.mdの記録のみ）。
 
 ## 1. 要件概要
 
@@ -1061,6 +1062,16 @@ DB全体との近似重複検出（8.4②、既存）に加え、**同一バッ�
 - **コミット**（`commitBatch`）: 25件全て成功。ローカルDBの`vocab_words`は159→184件に増加。新規`vocab_tags`行は作成されなかった（全てのタグが既存の3タグ「ビジネス」「日常会話」「Part7頻出」に解決された）。
 - 生成されたカードの内容（日本語訳・例文・語源解説）を目視確認し、既存パイプラインの生成物と遜色ない品質であることを確認した。
 - **クラウド本番DBへは一切投入していない**。ローカルDBに残った25件のテストデータは、次回セッションでの本格導入方針次第で残置・削除いずれも可能な状態のまま（ユーザーに確認予定）。
+
+### 21.7 テストバッチ分の本採用確定（2026-08-13）
+
+21.6のテストバッチ（B1/B2、25語: abandon, abandoned, able, abnormal, abnormally, aboard, abolish, aboriginal, aborigine, above, abruptly, absence, absent, absentee, absolute, absolutely, absorb, abstract, absurd, abundance, abundant, abuse, academic, academy, accent）について、ユーザーから「削除せず、本格導入の一部として扱う」との確定指示を受けた。動作検証用の使い捨てデータという位置づけを解除し、正式に採用が確定した語彙として扱う。
+
+**現状の反映範囲**: この25件は21.6の実行時点で**ローカルSupabaseの`vocab_words`にのみ**コミット済みで、クラウド本番DBには存在しない。23章の運用方針上、実際にアプリのユーザーに配信されるのはクラウドDBの内容のみのため、**本採用が確定した現時点でも、この25件はまだ本番環境には反映されていない**——「本採用が確定した」ことと「本番に反映済み」であることは別の状態であり、混同しないようここに明記する。
+
+**未実施のまま残っている作業**（本章の対象範囲外、別途実施が必要）:
+- クラウド本番Supabaseへの反映方法の選択——(a) 同じ25語リストで`import_cefrj_wordlist.ts`をクラウド向け（`.env`の既定設定のまま、ローカル向けの一時上書きをしない）に再実行し、Gemini呼び出しからやり直す、(b) ローカルDBで検証済みの25件の内容をそのままクラウドへ複製する、のいずれかを選ぶ必要がある。(a)は21.6で確認した「word/part_of_speechの忠実性は件数が少ないと安定するとは限らない」というリスクを踏まえると、Geminiの生成内容が再実行のたびに変わりうる（決定的ではない）ため、21.6で目視確認済みの内容をそのまま使いたい場合は(b)が適切。
+- CLAUDE.mdの方針上、クラウドSupabaseプロジェクトへのデータ変更は明示的な指示が必要な操作のため、上記いずれの方法で反映するかも含め、**次回改めてユーザーの指示を受けてから実施する**。
 
 ---
 
