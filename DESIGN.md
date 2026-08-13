@@ -103,6 +103,7 @@
 - 2026-08-13: CEFR-J Wordlist（21章、調査済み）を実際に取り込む小規模テストバッチを実装した。新規`scripts/content-generation/cefrjWordlist.ts`（CSVパース・POS/レベルフィルタ・複数語フレーズ除外・CEFR→TOEIC帯マッピング、純粋関数）+`import_cefrj_wordlist.ts`（CLI、既存の命名規約どおりCLIラッパー+camelCase実処理に分割）を新設し、`generateVocab.ts`に新規`generateVocabBatchFromWordlist`（既存`generateVocabBatch`は無改修）、`promptTemplates.ts`に新規`buildVocabFromWordlistPrompt`+`prompts/vocab_from_wordlist.md`を追加した。検証（`validateBatch.ts`）・コミット（`commitBatch.ts`）・レビュー（`review_batch.ts`）は完全に無改修のまま再利用できた。CEFR-Jのデータ（`cefrj-vocabulary-profile-1.5.csv`）と引用表記を`scripts/content-generation/data/`・`README.md`に追加した。`npm test`（356件、339件から+17件）・`npm run lint`（0件）・`npm run typecheck`（0件）・`npm run typecheck:scripts`（0件）全て通過。**ローカルSupabaseのみ**（環境変数を一時上書き、クラウド本番DBには一切書き込んでいない）で実際に25語（B1/B2、abandon〜accent）を抽出→生成→検証（25件全てauto_passed）→コミットまで通し、`vocab_words`が159→184件に増加したこと・生成内容の品質・word/part_of_speechの忠実性（25件全て一致）を確認した（詳細は21.6参照）。本格的な取り込み（数百〜数千語規模、クラウドへの反映）は今回のスコープ外とし、ユーザーからの別途指示を待つ。
 - 2026-08-13: 文法カテゴリ画面（`GrammarCategories`）を、29章で採用した暗色パネル（6a案）からアイボリーパネルへ再刷新した（29.3追記）。SessionSummary/WeakPoints/VocabProgressHub/GrammarDrill・MixedDrillが全てアイボリーパネルに統一される中、本画面だけが暗色パネルのまま「浮いている」というユーザー指摘を受けて対応。夜景バナー（遠近グリッド+街明かりSVG）・暗色ベゼルの行構成を削除し、WeakPoints/VocabProgressHubと同じ「アイボリーパネル+ライトベゼル行」に統一した。29.1でユーザー指定していた黄色い発光ドット装飾も、暗色パネル前提の意匠だったため削除した（理由をDESIGN.md 29.3に明記）。表示ロジック自体は無変更のため`GrammarCategories.test.tsx`は無改修で全件通過。`npm test`（327件）・`npm run lint`（0件）・`npm run typecheck`（0件）全て通過。ローカルSupabaseの使い捨てテストユーザーでブラウザ実地確認済み（検証用スクリプト・テストユーザーは作業後削除、コミット対象外）。
 - 2026-08-13: CEFR-Jテストバッチ（21.6、25語）の本採用をユーザーが確定した（21.7追記）。削除せず本格導入の一部として扱う方針となったが、この25件は現時点で**ローカルSupabaseの`vocab_words`にのみ**存在し、クラウド本番DBにはまだ反映されていない——「本採用確定」と「本番反映済み」は別の状態であることをDESIGN.mdに明記した。クラウドへの反映方法（Gemini再実行か、検証済み内容の複製か）は未選択で、CLAUDE.mdの方針上クラウドDBへのデータ変更は別途明示的な指示を受けてから実施する。コード変更なし（DESIGN.mdの記録のみ）。
+- 2026-08-14: CEFR-Jテストバッチ25語を、ユーザーの明示的な指示（(b)案: Gemini再実行せずローカルで検証済みの内容をそのまま複製）に基づき、クラウド本番Supabaseへ反映した（21.8追記）。一時スクリプト（作業後削除、リポジトリ非同梱）で、既存の`loadExistingVocabWordPosPairs`/`findSimilarVocabWords`をクラウド向けクライアントに差し替えて事前重複チェック（0件重複）し、クラウド側に新規`generation_batches`行（移送元のローカルbatch_idと複製である旨を`notes`に明記、トレーサビリティ確保）+`generation_batch_items`（`status:'auto_passed'`で再ステージング）を作成した上で、既存の`commitBatch()`を無改修のまま呼び出して`vocab_words`/`vocab_word_tags`へ反映した——新しいコミットロジックは実装せず、既存の仕組みの組み合わせのみで完結した。クラウド`vocab_words`が159→184件に増加したこと、移送先batch_idでの25件SELECT・「ビジネス」タグ経由のSELECTがいずれも正しく参照できることを確認した。一時スクリプト（移送用・確認用）は作業後に削除済み。コード変更はDESIGN.mdの記録のみ（一時スクリプトはコミット対象外）。
 
 ## 1. 要件概要
 
@@ -1067,11 +1068,27 @@ DB全体との近似重複検出（8.4②、既存）に加え、**同一バッ�
 
 21.6のテストバッチ（B1/B2、25語: abandon, abandoned, able, abnormal, abnormally, aboard, abolish, aboriginal, aborigine, above, abruptly, absence, absent, absentee, absolute, absolutely, absorb, abstract, absurd, abundance, abundant, abuse, academic, academy, accent）について、ユーザーから「削除せず、本格導入の一部として扱う」との確定指示を受けた。動作検証用の使い捨てデータという位置づけを解除し、正式に採用が確定した語彙として扱う。
 
-**現状の反映範囲**: この25件は21.6の実行時点で**ローカルSupabaseの`vocab_words`にのみ**コミット済みで、クラウド本番DBには存在しない。23章の運用方針上、実際にアプリのユーザーに配信されるのはクラウドDBの内容のみのため、**本採用が確定した現時点でも、この25件はまだ本番環境には反映されていない**——「本採用が確定した」ことと「本番に反映済み」であることは別の状態であり、混同しないようここに明記する。
+**反映当初の状態**: この25件は21.6の実行時点で**ローカルSupabaseの`vocab_words`にのみ**コミット済みで、クラウド本番DBには存在しなかった。23章の運用方針上、実際にアプリのユーザーに配信されるのはクラウドDBの内容のみのため、「本採用が確定した」ことと「本番に反映済み」であることは別の状態である旨をここに記録していた。**21.8で実際にクラウドへの反映まで完了した。**
 
-**未実施のまま残っている作業**（本章の対象範囲外、別途実施が必要）:
-- クラウド本番Supabaseへの反映方法の選択——(a) 同じ25語リストで`import_cefrj_wordlist.ts`をクラウド向け（`.env`の既定設定のまま、ローカル向けの一時上書きをしない）に再実行し、Gemini呼び出しからやり直す、(b) ローカルDBで検証済みの25件の内容をそのままクラウドへ複製する、のいずれかを選ぶ必要がある。(a)は21.6で確認した「word/part_of_speechの忠実性は件数が少ないと安定するとは限らない」というリスクを踏まえると、Geminiの生成内容が再実行のたびに変わりうる（決定的ではない）ため、21.6で目視確認済みの内容をそのまま使いたい場合は(b)が適切。
-- CLAUDE.mdの方針上、クラウドSupabaseプロジェクトへのデータ変更は明示的な指示が必要な操作のため、上記いずれの方法で反映するかも含め、**次回改めてユーザーの指示を受けてから実施する**。
+### 21.8 クラウドへの反映完了（2026-08-14、(b)案）
+
+21.7の未実施事項のうち、ユーザーから「Gemini再実行せず、(b)案（ローカルDBで検証済みの内容をそのまま複製）でクラウドへ反映する」との指示を受け、実施した。
+
+**移送方法**: 一時スクリプト`scripts/content-generation/_tmp_migrate_cefrj_test_batch.ts`（作業後削除、リポジトリには残していない）を作成し、以下の手順で実行した。既存の`commitBatch.ts`の仕組みは無改修のまま、次の手順で再利用できることを確認した（依頼の1点目）。
+
+1. ローカルSupabaseの対象バッチ（`batch_id=4961445f-fc21-46d9-9e59-5b1bc45df189`、`generation_batch_items.status='committed'`）から25件の`raw_payload`（Gemini生成時点のJSON、word/meaning_ja/example等一式）をそのまま読み出す。
+2. クラウド側の重複チェック（依頼の2点目）: 既存の`loadExistingVocabWordPosPairs`（`validateBatch.ts`、word+part_of_speech完全一致）と`findSimilarVocabWords`（`duplicateCheck.ts`、pg_trgm近似重複RPC）を**そのままクラウド向けSupabaseクライアントに差し替えて**再利用した——新しい重複チェックロジックは実装していない。25件全てで重複なしを確認（スキップ0件）。
+3. クラウド側に新規`generation_batches`行を1件作成し（`content_type:'vocab'`、`notes`に移送元のローカルbatch_idと「Gemini再実行せず複製」である旨を明記、10.10のトレーサビリティ方針を踏襲）、25件の`raw_payload`を`status:'auto_passed'`として同バッチの`generation_batch_items`に再ステージングした。
+4. 既存の`commitBatch()`（`commitBatch.ts`、無改修）をそのままクラウド向けクライアントで呼び出し、`vocab_words`/`vocab_word_tags`への実反映・バッチ集計・ステータス更新を行った。
+
+**実行結果**:
+- 事前のドライラン（`--dry-run`、読み取りのみ）でクラウド接続・重複チェックを先に確認してから本実行した。
+- クラウド`vocab_words`が159→184件に増加（ローカルでの増分と同数）。
+- 移送先の新規`generation_batches`（`id=b502647b-0a22-4a60-83c1-e843114fa99d`）配下に25件全て`committed`。
+- 反映後の確認（依頼の3点目）: 移送したbatch_idで`vocab_words`を25件SELECTできること、「ビジネス」タグ経由で該当語をSELECTできること（25件中22件が「ビジネス」タグ付き）を確認した。
+- 一時スクリプト（移送用・確認用の2ファイル）はいずれも作業完了後に削除済み（依頼の4点目、コミット対象外）。
+
+以上により、CEFR-Jテストバッチ25語は**クラウド本番DBへの反映まで完了**し、実際にアプリから参照可能な状態になった。
 
 ---
 
