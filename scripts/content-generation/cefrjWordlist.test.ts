@@ -4,6 +4,7 @@ import {
   excludeExistingCandidates,
   filterCefrjCandidates,
   parseCefrjCsv,
+  sampleEvenly,
   type CefrjCandidate,
 } from './cefrjWordlist'
 
@@ -109,6 +110,40 @@ describe('excludeExistingCandidates', () => {
 
   it('returns all candidates unchanged when nothing overlaps', () => {
     expect(excludeExistingCandidates(candidates, new Set())).toEqual(candidates)
+  })
+})
+
+describe('sampleEvenly (21.9)', () => {
+  it('returns all items unchanged when limit >= items.length', () => {
+    expect(sampleEvenly([1, 2, 3], 5)).toEqual([1, 2, 3])
+    expect(sampleEvenly([1, 2, 3], 3)).toEqual([1, 2, 3])
+  })
+
+  it('returns an empty array when limit is 0 or negative', () => {
+    expect(sampleEvenly([1, 2, 3], 0)).toEqual([])
+    expect(sampleEvenly([1, 2, 3], -1)).toEqual([])
+  })
+
+  it('spreads the selection across the full array rather than taking a prefix', () => {
+    const items = Array.from({ length: 100 }, (_, i) => i)
+    const result = sampleEvenly(items, 10)
+
+    expect(result).toHaveLength(10)
+    expect(result[0]).toBe(0)
+    // 先頭からの単純なsliceだと最大でも9になるが、均等サンプリングなら終端付近まで届く
+    expect(result[result.length - 1]).toBeGreaterThanOrEqual(90)
+    // 結果は昇順(元の並び順を保つ)
+    expect([...result].sort((a, b) => a - b)).toEqual(result)
+  })
+
+  it('is deterministic (same input always yields the same output)', () => {
+    const items = Array.from({ length: 4913 }, (_, i) => i)
+    expect(sampleEvenly(items, 300)).toEqual(sampleEvenly(items, 300))
+  })
+
+  it('never returns more items than requested', () => {
+    const items = Array.from({ length: 4913 }, (_, i) => i)
+    expect(sampleEvenly(items, 300).length).toBeLessThanOrEqual(300)
   })
 })
 

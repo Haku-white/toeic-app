@@ -6,6 +6,7 @@
 
 ## 更新履歴
 
+- 2026-08-14: CEFR-J Wordlistの本格導入バッチを実行（21.9・21.10）。25語のテストバッチ（21.6・21.8）を含めた累計語数がGemini API残高（実行時点で約650円）の制約上300語を超えないよう、ユーザー指示により今回の追加分を275語（`--limit 275`）に設定して実行。既存の自動問題生成パイプライン（`enhanceExplanations.ts`の配列版shrink-retry・`concurrencyPool`・段階的バッチサイズ縮小）をそのまま再利用する`runCefrjImport.ts`を新設し、`cefrjWordlist.ts`にアルファベット偏りを避けるための`sampleEvenly()`（決定的な均等ストライドサンプリング）を追加した。実行結果: 275語すべて生成成功（35サブバッチ、shrink-retry発動なし）、`auto_passed`273件・`needs_review`2件（品詞違い・語形違いによるfalse positiveと判断し承認、ユーザーへのエスカレートなし）、最終275件コミット。ローカル`vocab_words`が184→459件（CEFR-J由来の累計が25+275=300語に到達、ユーザー指定の上限に一致）。今回もクラウドへの反映は行わずローカルSupabaseのみで完結させた（指示どおり）。`npm test`371件・`npm run lint`・`npm run typecheck`・`npm run typecheck:scripts`すべて通過。新規: `runCefrjImport.ts`/`runCefrjImport.test.ts`。変更: `cefrjWordlist.ts`（`sampleEvenly`追加）/`cefrjWordlist.test.ts`/`import_cefrj_wordlist.ts`（`runCefrjImport`呼び出しへ書き換え）/`DESIGN.md`（21.9・21.10追記）。
 - 2026-08-08: 初版作成。ディレクトリ構成・DBスキーマ（FSRS版）・ER図・RLSポリシーを確定。
 - 2026-08-08: Gemini APIバッチ生成パイプライン（プロンプトテンプレート・自動検証・人力レビュー・本番反映フロー）を確定。
 - 2026-08-08: フロントエンド設計（技術スタック・認証方式・ルーティング・FSRS統合方針）を確定。
@@ -1089,6 +1090,50 @@ DB全体との近似重複検出（8.4②、既存）に加え、**同一バッ�
 - 一時スクリプト（移送用・確認用の2ファイル）はいずれも作業完了後に削除済み（依頼の4点目、コミット対象外）。
 
 以上により、CEFR-Jテストバッチ25語は**クラウド本番DBへの反映まで完了**し、実際にアプリから参照可能な状態になった。
+
+### 21.9 本格導入（設計・実装）
+
+25語のテストバッチで動作確認済みのパイプラインを、実運用規模に拡大する。ユーザーから「全件を一度に投入せず、CEFRレベル別・TOEIC帯別など妥当な単位でサブバッチに分け、既存の自動問題生成（10章）のバッチ化・503対策をそのまま活用する」との指示を受けた。
+
+**アーキテクチャ**: `enhanceExplanations.ts`（11.4、`runExplanationEnhancement`）が「対象アイテムの配列」を`chunkArray`で分割し、`generateExplanationsWithShrinkRetry`（`autoBackfill.ts`の`generateWithShrinkRetry`と同じ判定ロジック・縮小幅の配列版）+`concurrencyPool`で並列生成する既存パターンを持っており、CEFR-Jの「単語配列を渡して生成する」構造と完全に一致するため、新規ロジックを考案せずこのパターンをそのまま踏襲した。
+
+- 新規`scripts/content-generation/runCefrjImport.ts`: `enhanceExplanations.ts`と同型の「camelCase実処理（DI可能・テスト可能）」モジュール。`cefrjWordlist.ts`の候補抽出（21.5）→重複除外→`sampleEvenly`（新規、後述）による選定→`chunkArray`でのサブバッチ分割→`createThrottledPool`（`concurrencyPool.ts`、既存・無改修）での並列ディスパッチ→各サブバッチを`generateVocabBatchFromWordlist`（既存・無改修）で生成→`validateBatch`/`commitBatch`（既存・無改修）で検証・コミット、という一連の流れをオーケストレーションする。
+- shrink-retry: `autoBackfill.ts`の`generateWithShrinkRetry`は「件数」を縮小する設計のためそのままは使えず（`enhanceExplanations.ts`が既にこの問題に直面し配列版を新設済み、11.4参照）、同じ判定ロジック・縮小幅（既定8→4→2、`isRetryableError`）を持つ配列版`generateCefrjChunkWithShrinkRetry`を`enhanceExplanations.ts`の`generateExplanationsWithShrinkRetry`と同じ形で新設した。
+- `import_cefrj_wordlist.ts`（CLI）は`runCefrjImport`を呼ぶだけの薄いラッパーに書き換えた。以前の版（25語テストバッチ、単発の`generateVocabBatchFromWordlist`呼び出しのみ）から、サブバッチ・並列実行・shrink-retリに対応した。
+
+**`sampleEvenly`の新設（候補語選定の偏り修正）**: 25語テストバッチの実行後に気づいた問題として、CEFR-J CSVはほぼアルファベット順であり、`--limit`件を単純に先頭から`slice`すると"a"で始まる単語ばかりが選ばれてしまう（実際、25語テストバッチは`abandon`〜`accent`の"a"始まりのみだった）。本格導入では数百語規模になるため、この偏りを放置すると特定の頭文字に偏った語彙集合になる。CSVは見出し語のアルファベット順であるため、候補配列全体から等間隔にサンプリングする`sampleEvenly(items, limit)`（新規、`cefrjWordlist.ts`）を追加し、`--limit`件を語彙全体からまんべんなく選ぶようにした。乱数は使わず（`Math.random()`はスクリプトの決定性・再現性を損なうため避ける、既存パイプラインもどこでも乱数を使っていない）、`items.length / limit`のストライド幅で等間隔インデックスを取る決定的な実装とした。
+
+**1回あたりの生成上限（`DEFAULT_MAX_TOTAL`）**: コード上の既定値は**300語**とした。根拠は主にユーザーの明示的な推奨（「まずは数百語程度の妥当な規模から始める」）に従ったもので、加えて以下の点でも妥当と判断した。10章の自動問題生成の既定上限は100件（文法+語彙合算、文法は一意性セルフチェックでGemini呼び出しが最大2回/件かかる）、11章の追加解説は50件（セルフチェック無しのため1件あたり高々1回で済む分、10章より低い値だが対象が「弱点」という質的に絞り込まれた集合のため小さめに設定）。CEFR-J語彙生成は追加解説と同様に1件あたりGemini呼び出しは実質1回（サブバッチ内でまとめて1回、かつ選定語は事前にDB重複除外済みで自由生成より無駄打ちが少ない、21.6の実績どおり）だが、対象が「弱点」のような絞り込まれた小集合ではなく汎用語彙のバックフィルという性質上、10章の100件に近い規模が妥当と考え、ユーザー推奨の「数百語」の下限に近い300件を既定値とした。`--max-total`（CLIでは`--limit`）で上書き可能。
+
+**実行時にユーザーから追加の制約を受けた**: Gemini APIの残高が少ない（約650円）との申告を受け、「これまでに処理済みの語（21.6・21.8の25語）+今回の追加分」の**合計**が300語を超えないようにする方針に切り替えた。コード上の`DEFAULT_MAX_TOTAL`定数自体は300のままだが（1回の実行あたりの上限という設計自体は変えていない）、**今回の実行では`--limit 275`を明示的に指定**した（既処理25語+追加275語=合計300語）。実行結果は21.10参照。
+- **サブバッチサイズ**（`DEFAULT_BATCH_SIZE`）: 既定8語/回（10.5・11.4と同じ値をそのまま踏襲、変更する積極的理由が無いため）。
+- **同時実行数・スロットリング**: 既定concurrency=2・throttleMs=1500（10.8と同じ値をそのまま踏襲）。
+- **縮小幅**: 既定8→4→2、最大3段階（10.7・11.4と同じ値をそのまま踏襲）。
+
+**対象範囲（CEFRレベル）**: 既定`B1,B2`（21.2の分析どおり、既存収録語彙のCEFR一致分の81%がB1〜B2に集中しており、TOEIC対策教材として最も妥当な帯）。`--levels`で上書き可能（例: `--levels B1`のみに絞る等）。
+
+**needs_reviewの扱い**: 新しい運用は導入しない。既存方針（10.13・11.8）のとおり、エージェント（実行者）が`review_batch.ts`相当の判断で一次判断し、本当に曖昧なケースのみユーザーにエスカレートする。今回の実行結果は21.10に記録する。
+
+### 21.10 本格導入バッチの実行結果（2026-08-14、ローカルSupabaseのみ）
+
+**実行前の状態確認**: 実行前に、中断・中途半端な状態が残っていないかローカルDBを確認した。CEFR-J由来の`generation_batches`は21.6の25語バッチ（`batch_id=4961445f-...`）1件のみで、`status='completed'`・`generation_batch_items`は25件全て`committed`——未処理・中断状態は無いことを確認した。
+
+**実行コマンド**: `npx tsx scripts/content-generation/import_cefrj_wordlist.ts --limit 275`（`SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY`をローカル向けに一時上書き）。事前に`--dry-run`で候補数・選定数のみ確認してから本実行した。
+
+**結果**:
+- 候補: 4,888語（4,913語からテストバッチ分25語の重複除外後）中、`sampleEvenly`で275語を選定。
+- 35サブバッチ（8語×34+3語×1）に分割し、`concurrencyPool`（concurrency=2, throttleMs=1500）で並列生成。**shrink-retryは1度も発動しなかった**（429/5xxエラーなし、全サブバッチが初回で成功）。
+- 生成275件（依頼275件、切り詰め・パース救済なし）。
+- 検証: `auto_passed`=273件、`needs_review`=2件（**needs_review率 約0.73%**）。
+- needs_reviewの内容と一次判断（10.13・11.8の方針どおりエージェントが判断、ユーザーへのエスカレートは不要と判断した）:
+  - `frequently`（adverb）が既存`frequent`（adjective、類似度0.67）に近似——**品詞が異なる別語のためfalse positiveと判断し承認**。
+  - `phase`（noun）が既存`phase out`（phrasal verb、類似度0.60）に近似——**単語とフレーズという別語のためfalse positiveと判断し承認**。
+  - いずれも`applyReviewDecision`（`reviewBatch.ts`、既存の`review_batch.ts`が使うのと同じ関数）で`approved`にし、`commitBatch`で反映した。
+- 最終結果: 275件全て`vocab_words`にコミット（273件は自動、2件は上記の一次判断による承認後）。ローカル`vocab_words`が184→459件に増加（159 + 25 + 275 = 459で一致）。
+
+**Gemini APIコスト**: 実際の課金額はGemini APIダッシュボード側でのみ確認可能なため、本ツールからは正確な金額を計測できない。参考情報として、275語を35回のAPI呼び出し（1回あたり平均約7.9語、成功のみでリトライ発生なし）で生成し、各呼び出しは語彙カード1件あたりmeaning_ja/example_sentence_en/example_sentence_ja/etymology_note/tagsを生成する分量（21.6のテストバッチ実績と同程度の出力サイズ）だったことを記録する。ユーザー側でAPIダッシュボードの残高を確認の上、必要に応じて次回以降の`--limit`を調整することを推奨する。
+
+**クラウドへの反映方法の判断**（今回はクラウド反映自体は実施せず、方針の記録のみ）: 21.8で25語の移送に使った(b)方式（ローカルで検証済みの内容をそのまま複製）は、今回の275件規模でも同じ移送スクリプトのパターンがそのまま使える見込みで、**追加のGemini API呼び出しが一切発生しない**という利点がある（残高が少ない現状ではこちらを推奨）。一方、クラウド向けに`import_cefrj_wordlist.ts`を直接実行する方式は、ローカルとクラウドで別々にGemini生成が走る（実質2倍のAPI消費）ため、今回のようなAPI残高が限られる状況には不向き。**次回、クラウドへの反映を行う際は(b)方式（移送）を推奨する**——ただし実行自体はユーザーの明示的な指示を待ってから行う。
 
 ---
 

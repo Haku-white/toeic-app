@@ -91,3 +91,23 @@ export function excludeExistingCandidates(
 ): CefrjCandidate[] {
   return candidates.filter((c) => !existingWordPosPairs.has(wordPosKey(c.word, c.partOfSpeech)))
 }
+
+/**
+ * 21.9: `items`から`limit`件を、配列全体からほぼ等間隔になるよう決定的に選ぶ。
+ * CEFR-J CSVは見出し語のアルファベット順のため、`items.slice(0, limit)`のような先頭からの
+ * 単純な切り出しだと特定の頭文字（"a"始まりなど）に偏ってしまう問題への対応。乱数は使わず
+ * （スクリプトの再現性を保つため）、`items.length / limit`のストライド幅でインデックスを取る。
+ */
+export function sampleEvenly<T>(items: T[], limit: number): T[] {
+  if (limit <= 0) return []
+  if (items.length <= limit) return [...items]
+
+  const stride = items.length / limit
+  const indices = new Set<number>()
+  for (let i = 0; i < limit; i += 1) {
+    indices.add(Math.min(items.length - 1, Math.floor(i * stride)))
+  }
+  return Array.from(indices)
+    .sort((a, b) => a - b)
+    .map((i) => items[i])
+}

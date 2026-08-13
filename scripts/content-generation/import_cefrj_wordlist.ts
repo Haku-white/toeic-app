@@ -1,87 +1,65 @@
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
-import { dirname, join } from 'node:path'
 import { parseArgs } from './cliArgs'
-import { generateJsonArray } from './gemini'
+import { generateJson, generateJsonArray } from './gemini'
 import { createSupabaseAdminClient } from './supabaseAdmin'
-import { loadExistingVocabWordPosPairs } from './validateBatch'
-import { CEFR_TO_TOEIC_BAND, excludeExistingCandidates, filterCefrjCandidates, parseCefrjCsv } from './cefrjWordlist'
-import { generateVocabBatchFromWordlist } from './generateVocab'
-
-const currentDir = dirname(fileURLToPath(import.meta.url))
-const DEFAULT_CSV_PATH = join(currentDir, 'data', 'cefrj-vocabulary-profile-1.5.csv')
+import { runCefrjImport } from './runCefrjImport'
 
 /**
- * CEFR-J Wordlist（21章）から単語選定候補を抽出し、既存パイプライン
- * （generateVocabBatchFromWordlist→validate_batch.ts→review_batch.ts→commit_batch.ts）に
- * 投入する。単語選定はこのスクリプトが行い、日本語訳・例文・語源解説の生成はGeminiに委ねる
- * （21.3の役割分担）。
+ * CEFR-J Wordlist（21章）から単語選定候補を抽出し、既存パイプライン（サブバッチ分割・
+ * concurrencyPoolでの並列実行・段階的バッチサイズ縮小、10章・11.4を再利用）で
+ * generateVocabBatchFromWordlist→validate_batch→commit_batchまで自動実行する（21.9）。
  *
  * 使い方:
  *   npx tsx scripts/content-generation/import_cefrj_wordlist.ts \
- *     --limit 25 [--levels B1,B2] [--target-band 730] [--dry-run] [--model ...] [--csv ...]
+ *     [--limit 300] [--levels B1,B2] [--batch-size 8] [--concurrency 2] \
+ *     [--throttle-ms 1500] [--model ...] [--csv ...] [--dry-run]
  *
- * --limitは必須（21.5: 数千語規模の候補を誤って一度に投入しないための安全策）。
- * --dry-runを指定すると候補語の抽出結果を表示するのみで、Gemini API呼び出し・DB書き込みは行わない。
+ * --limitは1回あたりの生成上限（既定300、DESIGN.md 21.9参照。既に処理済みの語も含めた
+ * 累計を意識する場合は、呼び出し側で残り件数を計算して渡すこと）。
+ * --dry-runを指定すると候補語の抽出・選定結果のみ表示し、Gemini API呼び出し・DB書き込みは行わない。
  */
 async function main() {
   const args = parseArgs(process.argv.slice(2))
+  const dryRun = args['dry-run'] === 'true'
 
-  if (!args.limit) {
-    throw new Error('--limit は必須です（例: --limit 25。大量投入を避けるための安全策、DESIGN.md 21.5参照）')
-  }
-  const limit = Number(args.limit)
-  if (!Number.isInteger(limit) || limit <= 0) {
-    throw new Error(`--limit は正の整数で指定してください: ${args.limit}`)
-  }
-
-  const levels = (args.levels ?? 'B1,B2').split(',').map((s) => s.trim().toUpperCase())
-  for (const level of levels) {
-    if (!(level in CEFR_TO_TOEIC_BAND)) {
-      throw new Error(`未対応のCEFRレベルです: ${level}（対応レベル: ${Object.keys(CEFR_TO_TOEIC_BAND).join(', ')}）`)
-    }
+  const levels = args.levels ? args.levels.split(',').map((s) => s.trim().toUpperCase()) : undefined
+  const maxTotal = args.limit ? Number(args.limit) : args['max-total'] ? Number(args['max-total']) : undefined
+  if (maxTotal !== undefined && (!Number.isInteger(maxTotal) || maxTotal <= 0)) {
+    throw new Error(`--limit/--max-total は正の整数で指定してください: ${args.limit ?? args['max-total']}`)
   }
 
-  const csvPath = args.csv ?? DEFAULT_CSV_PATH
-  const csvText = readFileSync(csvPath, 'utf-8')
-  const rows = parseCefrjCsv(csvText)
-  const candidates = filterCefrjCandidates({ rows, levels })
+  const result = await runCefrjImport(
+    { supabase: createSupabaseAdminClient(), generateJsonArray, generateJson },
+    {
+      levels,
+      maxTotal,
+      batchSize: args['batch-size'] ? Number(args['batch-size']) : undefined,
+      concurrency: args.concurrency ? Number(args.concurrency) : undefined,
+      throttleMs: args['throttle-ms'] ? Number(args['throttle-ms']) : undefined,
+      modelName: args.model,
+      dryRun,
+    },
+  )
 
-  const supabase = createSupabaseAdminClient()
-  const existingPairs = await loadExistingVocabWordPosPairs(supabase)
-  const newCandidates = excludeExistingCandidates(candidates, existingPairs)
+  if (result.dryRun) {
+    console.log(`候補: ${result.totalCandidates}語中、今回選定: ${result.selectedCount}語（--dry-runのため生成は行いません）`)
+    return
+  }
 
   console.log(
-    `CEFR-J候補: レベル${levels.join('/')}で${candidates.length}語中、未収録${newCandidates.length}語（--limit ${limit}件のみ使用）`,
+    `候補: ${result.totalCandidates}語中、今回選定: ${result.selectedCount}語を${result.chunks.length}サブバッチで処理しました。`,
   )
-
-  const selected = newCandidates.slice(0, limit)
-  if (selected.length === 0) {
-    console.log('対象となる新規単語がありません。処理を終了します。')
-    return
-  }
-
-  if (args['dry-run']) {
-    console.log('--dry-run のため、以下の候補語を表示するのみでGemini呼び出し・DB書き込みは行いません:')
-    for (const c of selected) {
-      console.log(`  - ${c.word} (${c.partOfSpeech}, CEFR ${c.cefrLevel})`)
-    }
-    return
-  }
-
-  // 複数レベルが混在する場合、目安バンドは選定語のうち最も高いレベルに合わせる
-  // （既存パイプラインはバッチ全体に対して単一のtargetBandしか渡せない設計のため）。
-  const targetBand = args['target-band']
-    ? Number(args['target-band'])
-    : Math.max(...selected.map((c) => CEFR_TO_TOEIC_BAND[c.cefrLevel]))
-
-  const result = await generateVocabBatchFromWordlist(
-    { words: selected, targetBand, modelName: args.model },
-    { supabase, generateJsonArray },
+  console.log(
+    `生成${result.totalGenerated}件 / コミット${result.totalCommitted}件 / needs_review${result.totalNeedsReview}件` +
+      (result.totalGaveUp > 0 ? ` / 生成断念${result.totalGaveUp}件` : ''),
   )
-
-  console.log(`生成完了: batch_id=${result.batchId}, ${result.itemCount}件を generation_batch_items に保存しました。`)
-  console.log(`次は検証を実行してください: npx tsx scripts/content-generation/validate_batch.ts --batch ${result.batchId}`)
+  for (const chunk of result.chunks) {
+    console.log(
+      `  batch(es) ${chunk.batchIds.join(',') || '(none)'}: 依頼${chunk.requestedCount}件, ` +
+        `生成${chunk.generatedCount}件, auto_passed=${chunk.autoPassed}, needs_review=${chunk.needsReview}, ` +
+        `コミット${chunk.committedCount}件` +
+        (chunk.gaveUpCount > 0 ? `, 断念${chunk.gaveUpCount}件` : ''),
+    )
+  }
 }
 
 main().catch((error) => {
