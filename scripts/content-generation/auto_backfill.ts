@@ -12,7 +12,7 @@ import { createSupabaseAdminClient } from './supabaseAdmin'
  *   npm run backfill:auto -- [--dry-run] [--max-total 100] [--batch-size 8]
  *     [--concurrency 2] [--throttle-ms 1500]
  *     [--grammar-threshold 30] [--grammar-target 40]
- *     [--vocab-threshold 30] [--vocab-target 40] [--model gemini-3.6-flash]
+ *     [--vocab-threshold 30] [--vocab-target 40] [--model gemini-3.7-flash]
  */
 function printInventory(result: AutoBackfillResult) {
   console.log('\n=== 在庫チェック結果 ===')

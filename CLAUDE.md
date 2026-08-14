@@ -11,7 +11,7 @@
 - ローカルUI状態: Zustand v5（セッションの進行状態など、サーバー状態と分離すべきものに限定）
 - バックエンド: Supabase（Postgres + Auth + RLS）。ローカル開発は `supabase start`（`npm run db:start`）
 - SRSアルゴリズム: `ts-fsrs` **v4.7.1に固定**（`^5`系へは上げない）。理由: v5で`Card`/`ReviewLog`に追加された`learning_steps`フィールドを、既存DBスキーマ（`user_vocab_progress`/`vocab_review_logs`）が持たないため。アップグレードする場合は必ずスキーマ変更とセットで設計し直すこと（DESIGN.md 3章・6.3）
-- コンテンツ生成: `@google/genai`（Gemini API）。既定モデルは`.env`の`GEMINI_MODEL`（現在`gemini-3.6-flash`）。`generateJson()`に429/5xx向けの指数バックオフリトライ実装済み（DESIGN.md 19章）
+- コンテンツ生成: `@google/genai`（Gemini API）。既定モデルは`.env`の`GEMINI_MODEL`（現在`gemini-3.7-flash`）。`generateJson()`に429/5xx向けの指数バックオフリトライ実装済み（DESIGN.md 19章）
 - バリデーション: Zod v4
 - Node実行: `tsx`（`scripts/content-generation/`配下）
 - テスト: Vitest + Testing Library（jsdom）

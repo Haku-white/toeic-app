@@ -12,7 +12,7 @@ import { createSupabaseAdminClient } from './supabaseAdmin'
  *   npm run enhance:explanations -- [--dry-run] [--max-total 50] [--batch-size 8]
  *     [--concurrency 2] [--throttle-ms 1500]
  *     [--grammar-min-attempts 5] [--grammar-max-accuracy 0.7]
- *     [--vocab-min-reviews 5] [--vocab-min-again-rate 0.3] [--model gemini-3.6-flash]
+ *     [--vocab-min-reviews 5] [--vocab-min-again-rate 0.3] [--model gemini-3.7-flash]
  */
 function printTargets(result: EnhanceExplanationsResult) {
   console.log('\n=== 対象抽出結果 ===')
